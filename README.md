@@ -54,6 +54,14 @@ cd kalicut-*-linux-x86_64 && ./kalicut
 ./target/release/kalicut
 ```
 
+Optional selftest (sample videos directory):
+
+```bash
+# default: ~/Videos   or:  export KALICUT_TEST_VIDEOS=/path/to/videos
+cargo run --release --bin kalicut_selftest
+# cargo run --release --bin kalicut_selftest -- /path/to/videos
+```
+
 ### Build packages yourself
 
 ```bash

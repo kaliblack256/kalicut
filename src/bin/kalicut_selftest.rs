@@ -1,22 +1,64 @@
-//! Пакетный selftest: probe + trim (copy/reencode) по файлам в /home/kali/Videos.
-//! Запуск: cargo run --release --bin kalicut_selftest
+//! Batch selftest: probe + trim (copy/reencode) against sample videos.
+//!
+//! Video directory (first match wins):
+//!   1. CLI: `kalicut_selftest /path/to/videos`
+//!   2. Env: `KALICUT_TEST_VIDEOS`
+//!   3. Default: `~/Videos` (or `%USERPROFILE%\Videos` via dirs-style home)
+//!
+//! Run: `cargo run --release --bin kalicut_selftest -- [videos_dir]`
 
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-// Подключаем те же модули, что и main (через include относительных путей нельзя —
-// дублируем вызовы ffmpeg как в приложении + unit-логику через subprocess).
+// Same approach as the app: drive ffmpeg via subprocess for isolation.
+
+fn resolve_videos_dir(args: &[String]) -> PathBuf {
+    if let Some(p) = args.get(1) {
+        return PathBuf::from(p);
+    }
+    if let Ok(p) = env::var("KALICUT_TEST_VIDEOS") {
+        let p = p.trim();
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    // Portable default: $HOME/Videos (or USERPROFILE on Windows)
+    let home = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join("Videos")
+}
 
 fn main() {
-    let videos_dir = PathBuf::from("/home/kali/Videos");
+    let args: Vec<String> = env::args().collect();
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        eprintln!(
+            "Usage: {} [videos_dir]\n\n\
+             videos_dir  optional; else $KALICUT_TEST_VIDEOS, else ~/Videos\n\
+             Output temp files go under the system temp dir (kalicut-selftest/).",
+            args.first().map(String::as_str).unwrap_or("kalicut_selftest")
+        );
+        std::process::exit(0);
+    }
+
+    let videos_dir = resolve_videos_dir(&args);
     if !videos_dir.is_dir() {
-        eprintln!("FAIL: missing {videos_dir:?}");
+        eprintln!(
+            "FAIL: video directory not found: {}\n\
+             Pass a path, set KALICUT_TEST_VIDEOS, or put samples in ~/Videos.",
+            videos_dir.display()
+        );
         std::process::exit(1);
     }
 
     let mut files: Vec<PathBuf> = std::fs::read_dir(&videos_dir)
-        .unwrap()
+        .unwrap_or_else(|e| {
+            eprintln!("FAIL: read {}: {e}", videos_dir.display());
+            std::process::exit(1);
+        })
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| {
@@ -32,15 +74,16 @@ fn main() {
     files.sort();
 
     if files.is_empty() {
-        eprintln!("FAIL: no videos in {videos_dir:?}");
+        eprintln!("FAIL: no videos in {}", videos_dir.display());
         std::process::exit(1);
     }
 
     println!("=== KALICUT selftest ===");
+    println!("videos: {}", videos_dir.display());
     println!("files: {}", files.len());
     println!("passes: 15 per scenario\n");
 
-    let out_dir = PathBuf::from("/tmp/kalicut-selftest");
+    let out_dir = env::temp_dir().join("kalicut-selftest");
     let _ = std::fs::remove_dir_all(&out_dir);
     std::fs::create_dir_all(&out_dir).unwrap();
 

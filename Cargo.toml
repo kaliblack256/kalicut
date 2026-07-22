@@ -27,3 +27,8 @@ rfd = "0.15"
 rodio = { version = "0.20", default-features = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Smaller binaries, fewer host absolute paths left in the ELF
+[profile.release]
+strip = true
+codegen-units = 1

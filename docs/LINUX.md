@@ -169,9 +169,18 @@ ls -lh dist/
 
 Produces:
 
-- `target/release/kalicut` — raw binary  
+- `target/release/kalicut` — raw binary (stripped; paths remapped for privacy)  
 - `dist/kalicut_*_*.deb` — system package  
 - `dist/KALICUT-*-*.AppImage` — portable  
+
+### Selftest (developers)
+
+```bash
+# Default directory: ~/Videos
+# Or: export KALICUT_TEST_VIDEOS=/path/to/samples
+cargo run --release --bin kalicut_selftest
+cargo run --release --bin kalicut_selftest -- /path/to/videos
+```
 
 ---
 

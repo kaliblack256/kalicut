@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Security / privacy
+
+- Selftest no longer hardcodes `/home/kali/Videos`; uses CLI path, `KALICUT_TEST_VIDEOS`, or `~/Videos`
+- Release builds strip symbols and remap host absolute paths out of the binary
+
 ## [0.1.0] — 2026-07-22
 
 ### Added
