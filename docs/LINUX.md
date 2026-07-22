@@ -197,21 +197,30 @@ cargo run --release --bin kalicut_selftest -- /path/to/videos
 
 ---
 
-## macOS (Apple Silicon M1–M4)
+## macOS (Apple Silicon + Intel)
 
-Built on **GitHub Actions** (`macos-14`, arm64), not on Linux hosts.
+Built on **GitHub Actions**, not on Linux hosts:
+
+| Runner | Arch | Artifact |
+|--------|------|----------|
+| `macos-14` | arm64 (M1–M4) | `kalicut-*-macos-arm64.tar.gz` |
+| `macos-13` | x86_64 (Intel) | `kalicut-*-macos-x86_64.tar.gz` |
 
 ```bash
-# On a Mac with Homebrew (or via CI artifact):
+# On a Mac with Homebrew (native arch):
 ./scripts/package-macos.sh
-# → dist/kalicut-<ver>-macos-arm64.tar.gz
+# → dist/kalicut-<ver>-macos-arm64.tar.gz  or  …-macos-x86_64.tar.gz
 ```
 
-Manual workflow: GitHub → Actions → **macOS arm64** → Run workflow.  
-On tag `v*`, the arm64 tarball is attached to the Release automatically.
+Workflow: Actions → **macOS** → Run workflow.  
+On tag `v*`, both packages can attach to the Release.
 
-First open on macOS (unsigned): System Settings → Privacy & Security → Open Anyway,  
-or `xattr -dr com.apple.quarantine .` inside the unpacked folder.
+After download:
+```bash
+xattr -dr com.apple.quarantine .
+# or: ./unquarantine.sh
+./kalicut
+```
 
 ## What we intentionally skip (for now)
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Build a self-contained macOS arm64 (Apple Silicon M1–M4) package.
-# Must run on macOS (or GitHub Actions macos-14 arm64).
+# Build a self-contained macOS package (native arch).
+# Must run on macOS (GitHub Actions: macos-14 arm64 or macos-13 x86_64).
 #
 # Output: dist/kalicut-<ver>-macos-arm64.tar.gz
+#     or: dist/kalicut-<ver>-macos-x86_64.tar.gz
 # Contents: kalicut, ffmpeg, ffprobe, lib/*.dylib (libmpv + deps)
 set -euo pipefail
 

@@ -87,7 +87,7 @@ Apple Developer account — see [docs/MACOS_SIGNING.md](docs/MACOS_SIGNING.md).
 ```
 
 **macOS (on a Mac):** Homebrew + `./scripts/package-macos.sh`  
-**or** GitHub Actions → workflow **macOS arm64**.
+**or** GitHub Actions → workflow **macOS** (arm64 + Intel jobs).
 
 ### Package locally (Linux)
 
