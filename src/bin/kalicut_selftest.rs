@@ -83,9 +83,13 @@ fn main() {
     println!("files: {}", files.len());
     println!("passes: 15 per scenario\n");
 
-    let out_dir = env::temp_dir().join("kalicut-selftest");
+    // Unique dir per process so parallel runs don't delete each other's outputs
+    let out_dir = env::temp_dir().join(format!("kalicut-selftest-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out_dir);
-    std::fs::create_dir_all(&out_dir).unwrap();
+    std::fs::create_dir_all(&out_dir).unwrap_or_else(|e| {
+        eprintln!("FAIL: create {}: {e}", out_dir.display());
+        std::process::exit(1);
+    });
 
     let mut fails = 0u32;
     let mut ok = 0u32;
