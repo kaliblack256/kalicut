@@ -50,28 +50,28 @@ tar -xzf kalicut-*-linux-x86_64.tar.gz
 cd kalicut-*-linux-x86_64 && ./kalicut
 ```
 
-### macOS Apple Silicon (M1 / M2 / M3 / M4)
+### macOS
 
 | File | For |
 |------|-----|
-| `kalicut-*-macos-arm64.tar.gz` | M1–M4 |
+| `kalicut-*-macos-arm64.tar.gz` | **Apple Silicon** M1 / M2 / M3 / M4 |
+| `kalicut-*-macos-x86_64.tar.gz` | **Intel** Mac |
 
 ```bash
-tar -xzf kalicut-*-macos-arm64.tar.gz
-cd kalicut-*-macos-arm64
+# Apple Silicon
+tar -xzf kalicut-*-macos-arm64.tar.gz && cd kalicut-*-macos-arm64
 
-# Remove Gatekeeper quarantine (needed after download from the internet)
-xattr -dr com.apple.quarantine .
-# or:  ./unquarantine.sh
+# Intel
+# tar -xzf kalicut-*-macos-x86_64.tar.gz && cd kalicut-*-macos-x86_64
 
+xattr -dr com.apple.quarantine .   # or: ./unquarantine.sh
 ./kalicut
 ```
 
-If macOS still blocks: **System Settings → Privacy & Security → Open Anyway**,  
-or right-click `kalicut` → **Open** → **Open**.
+Which Mac? → Apple menu → **About This Mac** → chip (M1/M2/…) or “Intel”.
 
-Signing: **ad-hoc** by default (free). Full Developer ID + notarize needs a paid  
-Apple Developer account — see [docs/MACOS_SIGNING.md](docs/MACOS_SIGNING.md).
+If still blocked: **Privacy & Security → Open Anyway**, or right-click → **Open**.  
+Signing: ad-hoc by default — [docs/MACOS_SIGNING.md](docs/MACOS_SIGNING.md).
 
 ---
 
