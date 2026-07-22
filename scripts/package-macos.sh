@@ -238,15 +238,22 @@ ENTITLEMENTS="${ENTITLEMENTS:-}"
 codesign_one() {
   local path="$1"
   local identity="$2"
-  local extra=()
+  # Avoid "${arr[@]}" unbound under `set -u` when empty (macOS bash 3.2)
   if [[ -n "$ENTITLEMENTS" && -f "$ENTITLEMENTS" ]]; then
-    extra+=(--entitlements "$ENTITLEMENTS")
-  fi
-  if [[ "$identity" == "-" ]]; then
-    codesign --force --sign - --timestamp=none "${extra[@]}" "$path" 2>/dev/null \
-      || codesign --force --sign - "${extra[@]}" "$path"
+    if [[ "$identity" == "-" ]]; then
+      codesign --force --sign - --timestamp=none --entitlements "$ENTITLEMENTS" "$path" 2>/dev/null \
+        || codesign --force --sign - --entitlements "$ENTITLEMENTS" "$path"
+    else
+      codesign --force --options runtime --timestamp --sign "$identity" \
+        --entitlements "$ENTITLEMENTS" "$path"
+    fi
   else
-    codesign --force --options runtime --timestamp --sign "$identity" "${extra[@]}" "$path"
+    if [[ "$identity" == "-" ]]; then
+      codesign --force --sign - --timestamp=none "$path" 2>/dev/null \
+        || codesign --force --sign - "$path"
+    else
+      codesign --force --options runtime --timestamp --sign "$identity" "$path"
+    fi
   fi
 }
 
