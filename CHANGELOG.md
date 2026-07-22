@@ -7,6 +7,8 @@
 - macOS **Apple Silicon (arm64 / M1–M4)** packaging script and GitHub Actions workflow
   - `scripts/package-macos.sh` → `dist/kalicut-*-macos-arm64.tar.gz`
   - Workflow: `.github/workflows/macos-arm64.yml` (runner `macos-14`)
+- macOS **multi-mode signing**: ad-hoc (default), optional Developer ID + notarize via secrets
+  - Docs: `docs/MACOS_SIGNING.md`
 
 ## [0.1.1] — 2026-07-22
 

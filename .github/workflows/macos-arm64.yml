@@ -1,9 +1,10 @@
 # Build KALICUT for Apple Silicon (M1–M4 / arm64) on GitHub-hosted macOS.
 #
-# Triggers:
-#   - workflow_dispatch (manual)
-#   - push of tags v*
-#   - release published (optional upload)
+# Signing:
+#   - Default: ad-hoc (codesign -s -) — free, no secrets
+#   - Optional Developer ID: set repo secrets (see docs/MACOS_SIGNING.md)
+#
+# Triggers: workflow_dispatch, tags v*, release published
 name: macOS arm64
 
 on:
@@ -17,9 +18,18 @@ on:
 jobs:
   macos-arm64:
     name: Build macOS arm64 package
-    runs-on: macos-14 # Apple Silicon runner
+    runs-on: macos-14
     permissions:
       contents: write
+    env:
+      # Optional secrets — empty means ad-hoc
+      MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      NOTARIZE: ${{ secrets.NOTARIZE }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,16 +48,51 @@ jobs:
           pkg-config --modversion mpv
           ffmpeg -version | head -1
 
+      - name: Import Developer ID certificate (optional)
+        if: env.MACOS_CERTIFICATE_P12 != ''
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN="$RUNNER_TEMP/kalicut.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" $(security list-keychain -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          echo "KEYCHAIN_PATH=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          echo "SIGN_MODE=identity" >> "$GITHUB_ENV"
+          echo "CODESIGN_IDENTITY=$MACOS_CODESIGN_IDENTITY" >> "$GITHUB_ENV"
+          echo "ENTITLEMENTS=$GITHUB_WORKSPACE/packaging/macos/entitlements.plist" >> "$GITHUB_ENV"
+
+      - name: Default ad-hoc signing
+        if: env.MACOS_CERTIFICATE_P12 == ''
+        run: |
+          echo "SIGN_MODE=adhoc" >> "$GITHUB_ENV"
+          echo "No MACOS_CERTIFICATE_P12 secret — using ad-hoc codesign"
+
       - name: Build & package
         run: |
           chmod +x scripts/*.sh
+          export SIGN_MODE="${SIGN_MODE:-adhoc}"
+          export CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+          export ENTITLEMENTS="${ENTITLEMENTS:-}"
+          export NOTARIZE="${NOTARIZE:-0}"
+          export APPLE_ID="${APPLE_ID:-}"
+          export APPLE_TEAM_ID="${APPLE_TEAM_ID:-}"
+          export APPLE_APP_PASSWORD="${APPLE_APP_PASSWORD:-}"
           ./scripts/package-macos.sh
 
       - name: Checksums
         run: |
           cd dist
           ART="$(ls -1 kalicut-*-macos-arm64.tar.gz | head -1)"
-          # macOS ships shasum; Linux CI would use sha256sum
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$ART" | tee "${ART}.sha256"
           else
@@ -55,6 +100,8 @@ jobs:
           fi
           test -s "${ART}.sha256"
           ls -lh "$ART" "${ART}.sha256"
+          # show signing mode from package if present
+          tar -xOf "$ART" "*/SIGNING.txt" 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -73,7 +120,6 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           ART="$(ls -1 dist/kalicut-*-macos-arm64.tar.gz | head -1)"
           SUM="${ART}.sha256"
-          # Create release if missing, else upload assets
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --title "KALICUT ${TAG}" \

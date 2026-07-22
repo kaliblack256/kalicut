@@ -223,30 +223,113 @@ exec "$HERE/bin/kalicut" "$@"
 EOF
 chmod 755 "$OUT_DIR/kalicut"
 
+# ---------------------------------------------------------------------------
+# Code signing — several modes (docs/MACOS_SIGNING.md)
+#
+#   SIGN_MODE=adhoc|identity|none   (default: adhoc)
+#   CODESIGN_IDENTITY="Developer ID Application: Name (TEAMID)"
+#   ENTITLEMENTS=path/to.plist
+#   NOTARIZE=1 + APPLE_ID + APPLE_TEAM_ID + APPLE_APP_PASSWORD
+# ---------------------------------------------------------------------------
+SIGN_MODE="${SIGN_MODE:-adhoc}"
+SIGN_INFO="unsigned"
+ENTITLEMENTS="${ENTITLEMENTS:-}"
+
+codesign_one() {
+  local path="$1"
+  local identity="$2"
+  local extra=()
+  if [[ -n "$ENTITLEMENTS" && -f "$ENTITLEMENTS" ]]; then
+    extra+=(--entitlements "$ENTITLEMENTS")
+  fi
+  if [[ "$identity" == "-" ]]; then
+    codesign --force --sign - --timestamp=none "${extra[@]}" "$path" 2>/dev/null \
+      || codesign --force --sign - "${extra[@]}" "$path"
+  else
+    codesign --force --options runtime --timestamp --sign "$identity" "${extra[@]}" "$path"
+  fi
+}
+
+sign_tree() {
+  local identity="$1"
+  echo "==> codesign identity: ${identity}"
+  local f
+  for f in "$OUT_DIR/lib"/*.dylib; do
+    [[ -f "$f" ]] || continue
+    codesign_one "$f" "$identity"
+  done
+  for f in "$OUT_DIR/bin"/*; do
+    [[ -f "$f" ]] || continue
+    codesign_one "$f" "$identity"
+  done
+  codesign_one "$OUT_DIR/kalicut" "$identity" || true
+  codesign -dv --verbose=2 "$OUT_DIR/bin/kalicut" 2>&1 | head -20 || true
+  codesign --verify --verbose "$OUT_DIR/bin/kalicut" 2>&1 || true
+}
+
+case "$SIGN_MODE" in
+  none)
+    echo "==> signing disabled (SIGN_MODE=none)"
+    SIGN_INFO="unsigned"
+    ;;
+  identity)
+    if [[ -z "${CODESIGN_IDENTITY:-}" ]]; then
+      echo "error: SIGN_MODE=identity requires CODESIGN_IDENTITY" >&2
+      exit 1
+    fi
+    sign_tree "$CODESIGN_IDENTITY"
+    SIGN_INFO="identity: ${CODESIGN_IDENTITY}"
+    if [[ "${NOTARIZE:-0}" == "1" ]]; then
+      echo "==> notarize (notarytool)"
+      if [[ -z "${APPLE_ID:-}" || -z "${APPLE_TEAM_ID:-}" || -z "${APPLE_APP_PASSWORD:-}" ]]; then
+        echo "warning: NOTARIZE=1 but APPLE_* credentials missing — skip" >&2
+      else
+        ZIP_NOTARY="$ROOT/dist/${NAME}-for-notary.zip"
+        ditto -c -k --keepParent "$OUT_DIR" "$ZIP_NOTARY"
+        xcrun notarytool submit "$ZIP_NOTARY" \
+          --apple-id "$APPLE_ID" \
+          --team-id "$APPLE_TEAM_ID" \
+          --password "$APPLE_APP_PASSWORD" \
+          --wait
+        SIGN_INFO="${SIGN_INFO}; notarized"
+      fi
+    fi
+    ;;
+  adhoc|*)
+    # Free. Fixes post-install_name_tool consistency; not a public Gatekeeper pass.
+    sign_tree "-"
+    SIGN_INFO="ad-hoc (codesign -s -)"
+    ;;
+esac
+
+echo "$SIGN_INFO" >"$OUT_DIR/SIGNING.txt"
+
 cat >"$OUT_DIR/RUN.txt" <<EOF
 KALICUT ${VERSION} for macOS (${ARCH_LABEL})
 ================================
 
 Apple Silicon (M1 / M2 / M3 / M4) and Intel when built as x86_64.
 
+Signing: ${SIGN_INFO}
+
 Run:
   ./kalicut
 
-Or:
-  open -a Terminal .
-  ./kalicut
-
-First launch: if macOS blocks the app (unnotarized build):
+If macOS blocks the download:
   System Settings → Privacy & Security → Open Anyway
   or:  xattr -dr com.apple.quarantine .
 
-Bundled: kalicut, libmpv (+ dylibs), ffmpeg, ffprobe.
+Ad-hoc / self-signed builds are NOT fully trusted by Gatekeeper for strangers.
+Developer ID + notarization: see docs/MACOS_SIGNING.md
 
-Unsigned open-source build — no Apple Developer ID notarization.
+Bundled: kalicut, libmpv (+ dylibs), ffmpeg, ffprobe.
 EOF
 
 install -m 644 "$ROOT/LICENSE" "$OUT_DIR/LICENSE" 2>/dev/null || true
 install -m 644 "$ROOT/README.md" "$OUT_DIR/README.md" 2>/dev/null || true
+if [[ -f "$ROOT/docs/MACOS_SIGNING.md" ]]; then
+  install -m 644 "$ROOT/docs/MACOS_SIGNING.md" "$OUT_DIR/MACOS_SIGNING.md"
+fi
 
 mkdir -p "$ROOT/dist"
 rm -f "$OUT_TAR"
@@ -254,10 +337,10 @@ tar -C "$ROOT/dist" -czf "$OUT_TAR" "$NAME"
 
 echo
 echo "Created: $OUT_TAR"
+echo "Signing: $SIGN_INFO"
 ls -lh "$OUT_TAR"
 du -sh "$OUT_DIR"
 
-# Smoke: binary starts help? (GUI may fail headless)
 echo "==> otool sample"
 otool -L "$OUT_DIR/bin/kalicut" | head -15
 echo "ffmpeg: $("$OUT_DIR/bin/ffmpeg" -version 2>&1 | head -1)"

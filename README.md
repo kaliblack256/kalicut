@@ -88,7 +88,11 @@ cd kalicut-*-macos-arm64
 ./kalicut
 ```
 
-If Gatekeeper blocks an unsigned build: **Privacy & Security → Open Anyway**,  
+Signing: CI uses **ad-hoc** `codesign` by default (free). For real Gatekeeper  
+approval you need Apple Developer ID + notarization — see  
+**[docs/MACOS_SIGNING.md](docs/MACOS_SIGNING.md)** (several methods).
+
+If Gatekeeper still blocks: **Privacy & Security → Open Anyway**,  
 or `xattr -dr com.apple.quarantine .` in the folder.
 
 ## Dependencies
