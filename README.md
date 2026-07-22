@@ -1,117 +1,132 @@
 # KALICUT
 
-Small **Rust + egui** GUI to cut **audio and video** with **ffmpeg**.
+**Lossless audio/video cutting** — Rust + egui GUI, **ffmpeg** export, **libmpv** preview.
 
-Default mode is **stream copy** (`-map 0:v? -map 0:a? -map 0:s? -c copy`): container, codecs, bitrate, resolution, fps, audio, and subtitles stay like the source — no re-encoding.
+Default mode is **stream copy** (`-c copy`): quality stays like the source (no re-encode).
+
+[![Release](https://img.shields.io/github/v/release/kaliblack256/kalicut)](https://github.com/kaliblack256/kalicut/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+**Latest release:** [v0.1.1](https://github.com/kaliblack256/kalicut/releases/tag/v0.1.1)
+
+---
 
 ## Features
 
 - Audio and video (mp4, mkv, webm, mov, avi, mp3, flac, …)
-- Metadata: type, codecs, resolution, fps, bitrate, channels
-- **Timeline** + SoundCloud-style waveform (from the audio track)
-- Embedded **mpv** preview (`libmpv`, `hwdec=auto`) with Auto / Quality / Speed preview sizing
-- Playback: ▶, Space play/pause, selection play
-- Time: min / sec / ms + drag handles on the timeline (magnetic snap)
-- **Stream copy** (lossless) or **re-encode** (accurate cuts) with presets and manual settings
-- Output: `name_cut.ext` (or chosen container when re-encoding)
+- Metadata: codecs, resolution, fps, bitrate, channels
+- Timeline + SoundCloud-style waveform
+- Embedded **mpv** preview (`hwdec=auto`) · Auto / Quality / Speed
+- ▶ · Space play/pause · magnetic handles · min / sec / ms
+- **Stream copy** or **re-encode** (presets + manual)
+- Output: `name_cut.ext`
 
-## Install on Linux
+---
 
-Full guide: **[docs/LINUX.md](docs/LINUX.md)**.
+## Download & install
 
-**Release packages are self-contained:** `kalicut` + **libmpv** + **ffmpeg/ffprobe** + libraries.  
-No separate system packages are required for cut/export (normal Linux desktop is enough).
+Packages are **self-contained**: `kalicut` + **libmpv** + **ffmpeg/ffprobe** inside.  
+→ [All releases](https://github.com/kaliblack256/kalicut/releases)
 
-### Download (GitHub Releases)
+### Linux
 
-Grab from [Releases](https://github.com/kaliblack256/kalicut/releases):
-
-| Asset | Use |
-|-------|-----|
+| File | For |
+|------|-----|
 | `kalicut_*_amd64.deb` | Debian / Ubuntu / Kali / Mint |
-| `KALICUT-*-x86_64.AppImage` | Most distros (portable) |
-| `kalicut-*-linux-x86_64.tar.gz` | Unpack and run `./kalicut` |
+| `KALICUT-*-x86_64.AppImage` | Most distros |
+| `kalicut-*-linux-x86_64.tar.gz` | Unpack & run |
 
 ```bash
-# .deb
+# Debian-family
 sudo apt install ./kalicut_*_amd64.deb
+kalicut
 
 # AppImage
 chmod +x KALICUT-*-x86_64.AppImage
 ./KALICUT-*-x86_64.AppImage
 
-# portable
+# Portable
 tar -xzf kalicut-*-linux-x86_64.tar.gz
 cd kalicut-*-linux-x86_64 && ./kalicut
 ```
 
-### From source
-
-```bash
-./scripts/install-deps.sh   # Debian/Ubuntu/Kali, Fedora, Arch, openSUSE
-# need Rust: https://rustup.rs
-./scripts/build.sh
-./target/release/kalicut
-```
-
-Optional selftest (sample videos directory):
-
-```bash
-# default: ~/Videos   or:  export KALICUT_TEST_VIDEOS=/path/to/videos
-cargo run --release --bin kalicut_selftest
-# cargo run --release --bin kalicut_selftest -- /path/to/videos
-```
-
-### Build packages yourself
-
-```bash
-make all           # portable + .deb + AppImage → dist/
-# or Docker builder:
-make docker-out
-```
-
-| Method | Best for |
-|--------|----------|
-| Release download | end users (Linux + macOS arm64) |
-| Source | development |
-| `.deb` / AppImage / tar | Linux packaging |
-| `package-macos.sh` / Actions | Apple Silicon (M1–M4) |
-| Docker | clean Linux build host |
-
 ### macOS Apple Silicon (M1 / M2 / M3 / M4)
 
-CI builds `kalicut-*-macos-arm64.tar.gz` (Actions → **macOS arm64**, or on tag `v*`).
+| File | For |
+|------|-----|
+| `kalicut-*-macos-arm64.tar.gz` | M1–M4 |
 
 ```bash
 tar -xzf kalicut-*-macos-arm64.tar.gz
 cd kalicut-*-macos-arm64
+
+# Remove Gatekeeper quarantine (needed after download from the internet)
+xattr -dr com.apple.quarantine .
+# or:  ./unquarantine.sh
+
 ./kalicut
 ```
 
-Signing: CI uses **ad-hoc** `codesign` by default (free). For real Gatekeeper  
-approval you need Apple Developer ID + notarization — see  
-**[docs/MACOS_SIGNING.md](docs/MACOS_SIGNING.md)** (several methods).
+If macOS still blocks: **System Settings → Privacy & Security → Open Anyway**,  
+or right-click `kalicut` → **Open** → **Open**.
 
-If Gatekeeper still blocks: **Privacy & Security → Open Anyway**,  
-or `xattr -dr com.apple.quarantine .` in the folder.
+Signing: **ad-hoc** by default (free). Full Developer ID + notarize needs a paid  
+Apple Developer account — see [docs/MACOS_SIGNING.md](docs/MACOS_SIGNING.md).
 
-## Dependencies
+---
 
-**Run (packaged builds):** none beyond a normal Linux desktop.
+## Build from source
 
-**Build from source / package on a builder:** `ffmpeg`, `libmpv-dev`, ALSA, X11/GTK — see `./scripts/install-deps.sh`.
+```bash
+# Linux deps
+./scripts/install-deps.sh
+# Rust: https://rustup.rs
+
+./scripts/build.sh
+./target/release/kalicut
+```
+
+**macOS (on a Mac):** Homebrew + `./scripts/package-macos.sh`  
+**or** GitHub Actions → workflow **macOS arm64**.
+
+### Package locally (Linux)
+
+```bash
+make all          # → dist/*.deb AppImage tar.gz
+make docker-out   # build inside Docker
+```
+
+### Selftest
+
+```bash
+# samples in ~/Videos, or: export KALICUT_TEST_VIDEOS=/path
+cargo run --release --bin kalicut_selftest -- /path/to/videos
+```
+
+---
 
 ## Quality modes
 
-| Mode | FFmpeg | When to use |
-|------|--------|-------------|
+| Mode | FFmpeg | When |
+|------|--------|------|
 | Stream copy | `-c copy` | Default — keep original quality |
-| Re-encode | H.264/H.265/VP9 + audio codecs | Accurate cuts, or convert format/resolution/bitrate |
+| Re-encode | H.264/H.265/… | Accurate cuts, convert format/bitrate |
 
-**Preview quality** (Auto / Quality / Speed) only affects on-screen playback, not the exported file when stream copy is selected.
+Preview quality (Auto / Quality / Speed) only affects on-screen playback, not export in copy mode.
+
+---
+
+## Docs
+
+| Doc | Topic |
+|-----|--------|
+| [docs/LINUX.md](docs/LINUX.md) | Linux install, packages, Docker |
+| [docs/MACOS_SIGNING.md](docs/MACOS_SIGNING.md) | Ad-hoc / Developer ID / notarize / xattr |
+
+---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — [LICENSE](LICENSE).
 
-Bundled third-party tools (**ffmpeg**, **libmpv** and their libraries) keep their own upstream licenses (GPL/LGPL/etc.).
+Bundled **ffmpeg** and **libmpv** keep their own upstream licenses (GPL/LGPL/etc.).

@@ -311,23 +311,48 @@ esac
 
 echo "$SIGN_INFO" >"$OUT_DIR/SIGNING.txt"
 
+# Helper users can double-click / run after download
+cat >"$OUT_DIR/unquarantine.sh" <<'EOF'
+#!/bin/bash
+# Remove Gatekeeper "downloaded from the internet" flag from this folder.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+cd "$HERE"
+if ! command -v xattr >/dev/null 2>&1; then
+  echo "xattr not found (are you on macOS?)"
+  exit 1
+fi
+xattr -dr com.apple.quarantine .
+echo "OK: quarantine removed from:"
+echo "  $HERE"
+echo "Run:  ./kalicut"
+EOF
+chmod 755 "$OUT_DIR/unquarantine.sh"
+
 cat >"$OUT_DIR/RUN.txt" <<EOF
 KALICUT ${VERSION} for macOS (${ARCH_LABEL})
 ================================
 
-Apple Silicon (M1 / M2 / M3 / M4) and Intel when built as x86_64.
+Apple Silicon (M1 / M2 / M3 / M4).
 
 Signing: ${SIGN_INFO}
 
-Run:
+QUICK START (after download from GitHub)
+----------------------------------------
+  cd kalicut-${VERSION}-macos-${ARCH_LABEL}
+  xattr -dr com.apple.quarantine .
+  # same thing:  ./unquarantine.sh
   ./kalicut
 
-If macOS blocks the download:
+If still blocked:
   System Settings → Privacy & Security → Open Anyway
-  or:  xattr -dr com.apple.quarantine .
+  or right-click kalicut → Open → Open
 
-Ad-hoc / self-signed builds are NOT fully trusted by Gatekeeper for strangers.
-Developer ID + notarization: see docs/MACOS_SIGNING.md
+Check quarantine is gone:
+  xattr -lr . | grep quarantine || echo "OK — no quarantine"
+
+Ad-hoc builds are NOT notarized by Apple. Full trust for all users needs
+Developer ID + notarization (docs/MACOS_SIGNING.md).
 
 Bundled: kalicut, libmpv (+ dylibs), ffmpeg, ffprobe.
 EOF
