@@ -1,11 +1,16 @@
 # Changelog
 
-## Unreleased
+## [0.1.1] — 2026-07-22
 
 ### Security / privacy
 
-- Selftest no longer hardcodes `/home/kali/Videos`; uses CLI path, `KALICUT_TEST_VIDEOS`, or `~/Videos`
+- Selftest no longer hardcodes a developer home path; uses CLI path, `KALICUT_TEST_VIDEOS`, or `~/Videos`
 - Release builds strip symbols and remap host absolute paths out of the binary
+- Smaller stripped release binary (~13 MB before packaging)
+
+### Packaging
+
+- Rebuild of self-contained Linux packages (`.deb`, AppImage, portable `.tar.gz`) with the privacy fixes
 
 ## [0.1.0] — 2026-07-22
 
