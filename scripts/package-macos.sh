@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Build a self-contained macOS package (native arch).
-# Must run on macOS (GitHub Actions: macos-14 arm64 or macos-13 x86_64).
+# Build a self-contained macOS package.
+# Must run on macOS.
+#
+# Arch selection:
+#   native: uname -m  (arm64 or x86_64)
+#   override: KALICUT_MACOS_ARCH=x86_64 + CARGO_BUILD_TARGET=x86_64-apple-darwin
+#             (Rosetta / Intel Homebrew under /usr/local)
 #
 # Output: dist/kalicut-<ver>-macos-arm64.tar.gz
 #     or: dist/kalicut-<ver>-macos-x86_64.tar.gz
-# Contents: kalicut, ffmpeg, ffprobe, lib/*.dylib (libmpv + deps)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,10 +19,11 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-ARCH="$(uname -m)"
+HOST_ARCH="$(uname -m)"
+ARCH="${KALICUT_MACOS_ARCH:-$HOST_ARCH}"
 case "$ARCH" in
-  arm64) ARCH_LABEL=arm64 ;;
-  x86_64) ARCH_LABEL=x86_64 ;;
+  arm64) ARCH_LABEL=arm64; RUST_TARGET="${CARGO_BUILD_TARGET:-aarch64-apple-darwin}" ;;
+  x86_64) ARCH_LABEL=x86_64; RUST_TARGET="${CARGO_BUILD_TARGET:-x86_64-apple-darwin}" ;;
   *)
     echo "error: unsupported arch: $ARCH" >&2
     exit 1
@@ -30,40 +35,51 @@ NAME="kalicut-${VERSION}-macos-${ARCH_LABEL}"
 OUT_DIR="$ROOT/dist/$NAME"
 OUT_TAR="$ROOT/dist/${NAME}.tar.gz"
 
-echo "==> macOS package for $ARCH_LABEL (version $VERSION)"
+echo "==> macOS package for $ARCH_LABEL (host=$HOST_ARCH, version $VERSION, target=$RUST_TARGET)"
 
 # --- deps (Homebrew) ---
+# Prefer already-configured brew (Intel: /usr/local when cross-building with Rosetta)
 if ! command -v brew >/dev/null 2>&1; then
   echo "error: Homebrew required. https://brew.sh" >&2
   exit 1
 fi
 
-echo "==> brew packages"
-brew list mpv >/dev/null 2>&1 || brew install mpv
-brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
-brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
-
-export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-export LIBRARY_PATH="$(brew --prefix)/lib:${LIBRARY_PATH:-}"
-export CPATH="$(brew --prefix)/include:${CPATH:-}"
-
-# Prefer Homebrew mpv/ffmpeg
 BREW_PREFIX="$(brew --prefix)"
+echo "==> brew prefix: $BREW_PREFIX"
+# Only auto-install when matching native brew (skip reinstall when CI already set up x86 brew)
+if [[ "${KALICUT_SKIP_BREW_INSTALL:-0}" != "1" ]]; then
+  echo "==> brew packages"
+  brew list mpv >/dev/null 2>&1 || brew install mpv
+  brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+  brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
+fi
+
+export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-$BREW_PREFIX/lib/pkgconfig}"
+export LIBRARY_PATH="${LIBRARY_PATH:-$BREW_PREFIX/lib}"
+export CPATH="${CPATH:-$BREW_PREFIX/include}"
 export PATH="$BREW_PREFIX/bin:$PATH"
 
 if ! pkg-config --exists mpv; then
   echo "error: pkg-config cannot find mpv (brew install mpv)" >&2
   exit 1
 fi
+echo "mpv pkg: $(pkg-config --modversion mpv)"
 
-echo "==> cargo build --release"
+echo "==> cargo build --release --target $RUST_TARGET"
 if [[ -n "${HOME:-}" && -n "${ROOT:-}" ]]; then
   export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=${HOME}/= --remap-path-prefix=${ROOT}/="
 fi
-cargo build --release --bin kalicut
+# Ensure rustc links against the selected brew libs
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-L native=${BREW_PREFIX}/lib"
+cargo build --release --target "$RUST_TARGET" --bin kalicut
 
-BIN="$ROOT/target/release/kalicut"
+BIN="$ROOT/target/${RUST_TARGET}/release/kalicut"
+# native default target path fallback
+if [[ ! -x "$BIN" && "$RUST_TARGET" == "$(rustc -vV | awk '/host:/{print $2}')" ]]; then
+  BIN="$ROOT/target/release/kalicut"
+fi
 test -x "$BIN"
+file "$BIN" || true
 if command -v strip >/dev/null 2>&1; then
   strip -x "$BIN" 2>/dev/null || strip "$BIN" || true
 fi

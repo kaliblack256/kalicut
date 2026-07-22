@@ -1,6 +1,7 @@
 # Build KALICUT for macOS:
-#   - Apple Silicon (M1–M4): macos-14 arm64
-#   - Intel: macos-13 x86_64
+#   - Apple Silicon (M1–M4): native macos-14 arm64
+#   - Intel x86_64: macos-14 + Rosetta + x86_64 Homebrew
+#     (GitHub macos-13 Intel runners are scarce/queued forever)
 #
 # Signing: ad-hoc by default; Developer ID via secrets (docs/MACOS_SIGNING.md)
 name: macOS
@@ -14,25 +15,12 @@ on:
     types: [published]
 
 jobs:
-  package:
-    name: macOS ${{ matrix.arch }}
-    runs-on: ${{ matrix.os }}
+  # ---------- Apple Silicon ----------
+  arm64:
+    name: macOS arm64
+    runs-on: macos-14
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            arch: arm64
-            rust_target: aarch64-apple-darwin
-            artifact_name: kalicut-macos-arm64
-            artifact_glob: kalicut-*-macos-arm64.tar.gz
-          - os: macos-13
-            arch: x86_64
-            rust_target: x86_64-apple-darwin
-            artifact_name: kalicut-macos-x86_64
-            artifact_glob: kalicut-*-macos-x86_64.tar.gz
     env:
       MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
       MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -42,107 +30,171 @@ jobs:
       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
       NOTARIZE: ${{ secrets.NOTARIZE }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust_target }}
-
-      - name: Show arch
-        run: |
-          uname -m
-          uname -a
-          rustc -vV
-
-      - name: Install Homebrew deps
+          targets: aarch64-apple-darwin
+      - name: Homebrew deps
         run: |
           brew update
           brew install mpv ffmpeg pkg-config
           echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
           pkg-config --modversion mpv
-          ffmpeg -version | head -1
-          file "$(command -v ffmpeg)" || true
-
-      - name: Import Developer ID certificate (optional)
-        if: env.MACOS_CERTIFICATE_P12 != ''
+      - name: Ad-hoc or Developer ID
         run: |
-          set -euo pipefail
-          CERT_PATH="$RUNNER_TEMP/certificate.p12"
-          KEYCHAIN="$RUNNER_TEMP/kalicut.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
-          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" \
-            -A -t cert -f pkcs12 -k "$KEYCHAIN"
-          security list-keychain -d user -s "$KEYCHAIN" $(security list-keychain -d user | tr -d '"')
-          security set-key-partition-list -S apple-tool:,apple: -s \
-            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security find-identity -v -p codesigning "$KEYCHAIN"
-          echo "SIGN_MODE=identity" >> "$GITHUB_ENV"
-          echo "CODESIGN_IDENTITY=$MACOS_CODESIGN_IDENTITY" >> "$GITHUB_ENV"
-          echo "ENTITLEMENTS=$GITHUB_WORKSPACE/packaging/macos/entitlements.plist" >> "$GITHUB_ENV"
-
-      - name: Default ad-hoc signing
-        if: env.MACOS_CERTIFICATE_P12 == ''
-        run: |
-          echo "SIGN_MODE=adhoc" >> "$GITHUB_ENV"
-          echo "No MACOS_CERTIFICATE_P12 — ad-hoc codesign"
-
-      - name: Build & package
+          if [ -n "${MACOS_CERTIFICATE_P12:-}" ]; then
+            CERT_PATH="$RUNNER_TEMP/certificate.p12"
+            KEYCHAIN="$RUNNER_TEMP/kalicut.keychain-db"
+            KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+            echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+            security list-keychain -d user -s "$KEYCHAIN" $(security list-keychain -d user | tr -d '"')
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            echo "SIGN_MODE=identity" >> "$GITHUB_ENV"
+            echo "CODESIGN_IDENTITY=$MACOS_CODESIGN_IDENTITY" >> "$GITHUB_ENV"
+            echo "ENTITLEMENTS=$GITHUB_WORKSPACE/packaging/macos/entitlements.plist" >> "$GITHUB_ENV"
+          else
+            echo "SIGN_MODE=adhoc" >> "$GITHUB_ENV"
+          fi
+      - name: Package
         run: |
           chmod +x scripts/*.sh
           export SIGN_MODE="${SIGN_MODE:-adhoc}"
-          export CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
-          export ENTITLEMENTS="${ENTITLEMENTS:-}"
-          export NOTARIZE="${NOTARIZE:-0}"
-          export APPLE_ID="${APPLE_ID:-}"
-          export APPLE_TEAM_ID="${APPLE_TEAM_ID:-}"
-          export APPLE_APP_PASSWORD="${APPLE_APP_PASSWORD:-}"
           ./scripts/package-macos.sh
-          # Sanity: archive name matches matrix arch
-          ls -lh dist/
-          test -f dist/kalicut-*-macos-${{ matrix.arch }}.tar.gz
-
-      - name: Checksums
+          ls -lh dist/kalicut-*-macos-arm64.tar.gz
+      - name: Checksums + artifact
         run: |
           cd dist
-          ART="$(ls -1 ${{ matrix.artifact_glob }} | head -1)"
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$ART" | tee "${ART}.sha256"
-          else
-            shasum -a 256 "$ART" | tee "${ART}.sha256"
-          fi
-          test -s "${ART}.sha256"
-          ls -lh "$ART" "${ART}.sha256"
-          tar -xOf "$ART" "*/SIGNING.txt" 2>/dev/null || true
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          ART=$(ls -1 kalicut-*-macos-arm64.tar.gz | head -1)
+          shasum -a 256 "$ART" | tee "${ART}.sha256"
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: kalicut-macos-arm64
           path: |
-            dist/${{ matrix.artifact_glob }}
-            dist/${{ matrix.artifact_glob }}.sha256
-          if-no-files-found: error
-
-      - name: Attach to GitHub Release (on tags)
+            dist/kalicut-*-macos-arm64.tar.gz
+            dist/kalicut-*-macos-arm64.tar.gz.sha256
+      - name: Attach to release (tags)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
-          ART="$(ls -1 dist/${{ matrix.artifact_glob }} | head -1)"
+          ART=$(ls -1 dist/kalicut-*-macos-arm64.tar.gz | head -1)
           SUM="${ART}.sha256"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --title "KALICUT ${TAG}" \
-              --notes "macOS ${{ matrix.arch }} package attached by CI." \
-              "$ART" "$SUM"
-          else
+          if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$ART" "$SUM" --clobber
+          else
+            gh release create "$TAG" --title "KALICUT ${TAG}" --notes "macOS arm64" "$ART" "$SUM"
+          fi
+
+  # ---------- Intel via Rosetta on Apple Silicon host ----------
+  x86_64:
+    name: macOS x86_64 (Rosetta)
+    runs-on: macos-14
+    permissions:
+      contents: write
+    env:
+      MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      NOTARIZE: ${{ secrets.NOTARIZE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rosetta 2
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Install x86_64 Homebrew + deps
+        run: |
+          set -euo pipefail
+          # Intel Homebrew lives under /usr/local (arm brew is /opt/homebrew)
+          if [[ ! -x /usr/local/bin/brew ]]; then
+            echo "Installing x86_64 Homebrew under /usr/local …"
+            arch -x86_64 /bin/bash -c 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+          fi
+          echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.bash_profile"
+          eval "$(/usr/local/bin/brew shellenv)"
+          arch -x86_64 /usr/local/bin/brew update
+          arch -x86_64 /usr/local/bin/brew install mpv ffmpeg pkg-config
+          echo "X86_BREW=/usr/local" >> "$GITHUB_ENV"
+          /usr/local/bin/pkg-config --modversion mpv
+          file /usr/local/bin/ffmpeg
+          file /usr/local/bin/pkg-config
+
+      - name: Ad-hoc or Developer ID
+        run: |
+          if [ -n "${MACOS_CERTIFICATE_P12:-}" ]; then
+            CERT_PATH="$RUNNER_TEMP/certificate.p12"
+            KEYCHAIN="$RUNNER_TEMP/kalicut.keychain-db"
+            KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+            echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+            security list-keychain -d user -s "$KEYCHAIN" $(security list-keychain -d user | tr -d '"')
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            echo "SIGN_MODE=identity" >> "$GITHUB_ENV"
+            echo "CODESIGN_IDENTITY=$MACOS_CODESIGN_IDENTITY" >> "$GITHUB_ENV"
+            echo "ENTITLEMENTS=$GITHUB_WORKSPACE/packaging/macos/entitlements.plist" >> "$GITHUB_ENV"
+          else
+            echo "SIGN_MODE=adhoc" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build & package x86_64
+        run: |
+          set -euo pipefail
+          chmod +x scripts/*.sh
+          eval "$(/usr/local/bin/brew shellenv)"
+          export PATH="/usr/local/bin:$PATH"
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export PKG_CONFIG="/usr/local/bin/pkg-config"
+          export LIBRARY_PATH="/usr/local/lib:${LIBRARY_PATH:-}"
+          export CPATH="/usr/local/include:${CPATH:-}"
+          export SIGN_MODE="${SIGN_MODE:-adhoc}"
+          # Force packaging for x86_64 even on arm64 host
+          export KALICUT_MACOS_ARCH=x86_64
+          export CARGO_BUILD_TARGET=x86_64-apple-darwin
+          export KALICUT_SKIP_BREW_INSTALL=1
+          ./scripts/package-macos.sh
+          ls -lh dist/kalicut-*-macos-x86_64.tar.gz
+          file dist/kalicut-*-macos-x86_64/bin/kalicut || \
+            tar -xOf dist/kalicut-*-macos-x86_64.tar.gz '*/bin/kalicut' > /tmp/kbin && file /tmp/kbin
+
+      - name: Checksums + artifact
+        run: |
+          cd dist
+          ART=$(ls -1 kalicut-*-macos-x86_64.tar.gz | head -1)
+          shasum -a 256 "$ART" | tee "${ART}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kalicut-macos-x86_64
+          path: |
+            dist/kalicut-*-macos-x86_64.tar.gz
+            dist/kalicut-*-macos-x86_64.tar.gz.sha256
+
+      - name: Attach to release (tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ART=$(ls -1 dist/kalicut-*-macos-x86_64.tar.gz | head -1)
+          SUM="${ART}.sha256"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ART" "$SUM" --clobber
+          else
+            gh release create "$TAG" --title "KALICUT ${TAG}" --notes "macOS x86_64" "$ART" "$SUM"
           fi
