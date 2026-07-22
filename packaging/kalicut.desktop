@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=KALICUT
+GenericName=Audio/Video Trimmer
+Comment=Lossless audio/video cutting with ffmpeg
+Exec=kalicut
+Icon=kalicut
+Terminal=false
+Categories=AudioVideo;Audio;Video;AudioVideoEditing;
+Keywords=cut;trim;ffmpeg;audio;video;mpv;
+StartupNotify=true
+StartupWMClass=kalicut

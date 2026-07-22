@@ -1,0 +1,8 @@
+/target
+/dist
+*.deb
+*.AppImage
+*.tar.gz
+.cargo-cache
+squashfs-root/
+*.log

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a3a2f"/>
+      <stop offset="100%" stop-color="#0d1f1a"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="url(#bg)"/>
+  <rect x="40" y="108" width="176" height="40" rx="8" fill="#2d8f6f"/>
+  <rect x="72" y="100" width="8" height="56" rx="3" fill="#e8f5f0"/>
+  <rect x="176" y="100" width="8" height="56" rx="3" fill="#e8f5f0"/>
+  <text x="128" y="78" text-anchor="middle" font-family="DejaVu Sans, sans-serif"
+        font-size="36" font-weight="700" fill="#e8f5f0">KC</text>
+  <path d="M118 168 L138 188 L118 208 L98 188 Z" fill="#7dcea0" opacity="0.9"/>
+</svg>
