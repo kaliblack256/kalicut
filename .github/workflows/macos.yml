@@ -123,14 +123,27 @@ jobs:
             echo "Installing x86_64 Homebrew under /usr/local …"
             arch -x86_64 /bin/bash -c 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
           fi
-          echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.bash_profile"
           eval "$(/usr/local/bin/brew shellenv)"
-          arch -x86_64 /usr/local/bin/brew update
-          arch -x86_64 /usr/local/bin/brew install mpv ffmpeg pkg-config
-          echo "X86_BREW=/usr/local" >> "$GITHUB_ENV"
-          /usr/local/bin/pkg-config --modversion mpv
-          file /usr/local/bin/ffmpeg
-          file /usr/local/bin/pkg-config
+          export HOMEBREW_NO_ENV_HINTS=1
+          export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+          arch -x86_64 /usr/local/bin/brew update || true
+          # Link conflicts on runners (system python in /usr/local) must not fail the job
+          arch -x86_64 /usr/local/bin/brew install --overwrite mpv ffmpeg pkgconf pkg-config \
+            || arch -x86_64 /usr/local/bin/brew install mpv ffmpeg pkgconf || true
+          arch -x86_64 /usr/local/bin/brew link --overwrite --force pkgconf 2>/dev/null || true
+          arch -x86_64 /usr/local/bin/brew link --overwrite mpv 2>/dev/null || true
+          arch -x86_64 /usr/local/bin/brew link --overwrite ffmpeg 2>/dev/null || true
+          # Prefer Cellar/opt paths even if bin symlinks clash
+          export PATH="/usr/local/bin:/usr/local/opt/mpv/bin:/usr/local/opt/ffmpeg/bin:$PATH"
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/opt/mpv/lib/pkgconfig:/usr/local/opt/ffmpeg/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          # Prove libs exist
+          ls /usr/local/opt/mpv/lib/libmpv* || ls /usr/local/lib/libmpv* 
+          ls /usr/local/opt/ffmpeg/bin/ffmpeg || ls /usr/local/bin/ffmpeg
+          (pkg-config --modversion mpv || /usr/local/bin/pkg-config --modversion mpv || \
+            /usr/local/opt/pkgconf/bin/pkgconf --modversion mpv)
+          file "$(command -v ffmpeg || echo /usr/local/opt/ffmpeg/bin/ffmpeg)"
 
       - name: Ad-hoc or Developer ID
         run: |
