@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- macOS **Apple Silicon (arm64 / M1–M4)** packaging script and GitHub Actions workflow
+  - `scripts/package-macos.sh` → `dist/kalicut-*-macos-arm64.tar.gz`
+  - Workflow: `.github/workflows/macos-arm64.yml` (runner `macos-14`)
+
 ## [0.1.1] — 2026-07-22
 
 ### Security / privacy

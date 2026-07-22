@@ -72,10 +72,24 @@ make docker-out
 
 | Method | Best for |
 |--------|----------|
-| Release download | end users |
+| Release download | end users (Linux + macOS arm64) |
 | Source | development |
-| `.deb` / AppImage / tar | local packaging |
-| Docker | clean build host |
+| `.deb` / AppImage / tar | Linux packaging |
+| `package-macos.sh` / Actions | Apple Silicon (M1–M4) |
+| Docker | clean Linux build host |
+
+### macOS Apple Silicon (M1 / M2 / M3 / M4)
+
+CI builds `kalicut-*-macos-arm64.tar.gz` (Actions → **macOS arm64**, or on tag `v*`).
+
+```bash
+tar -xzf kalicut-*-macos-arm64.tar.gz
+cd kalicut-*-macos-arm64
+./kalicut
+```
+
+If Gatekeeper blocks an unsigned build: **Privacy & Security → Open Anyway**,  
+or `xattr -dr com.apple.quarantine .` in the folder.
 
 ## Dependencies
 

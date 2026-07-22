@@ -1,14 +1,15 @@
 # KALICUT — common Linux targets
-.PHONY: help deps build deb appimage portable all clean docker-build docker-out
+.PHONY: help deps build deb appimage portable macos all clean docker-build docker-out
 
 help:
 	@echo "Targets:"
 	@echo "  make deps       - install distro build dependencies"
 	@echo "  make build      - cargo build --release"
-	@echo "  make deb        - .deb with bundled libs (host: ffmpeg only)"
-	@echo "  make appimage   - AppImage with bundled libs (host: ffmpeg only)"
+	@echo "  make deb        - .deb with bundled libs"
+	@echo "  make appimage   - AppImage with bundled libs"
 	@echo "  make portable   - portable tar.gz with bundled libs"
-	@echo "  make all        - binary + portable + .deb + AppImage"
+	@echo "  make macos      - macOS arm64 package (run on Mac / CI only)"
+	@echo "  make all        - binary + portable + .deb + AppImage (Linux)"
 	@echo "  make docker-out - build packages inside Docker → ./dist"
 	@echo "  make clean      - remove dist/ and cargo target/"
 
@@ -26,6 +27,9 @@ appimage:
 
 portable:
 	./scripts/package-portable.sh
+
+macos:
+	./scripts/package-macos.sh
 
 all:
 	./scripts/package-all.sh

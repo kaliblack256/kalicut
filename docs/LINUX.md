@@ -197,8 +197,24 @@ cargo run --release --bin kalicut_selftest -- /path/to/videos
 
 ---
 
+## macOS (Apple Silicon M1–M4)
+
+Built on **GitHub Actions** (`macos-14`, arm64), not on Linux hosts.
+
+```bash
+# On a Mac with Homebrew (or via CI artifact):
+./scripts/package-macos.sh
+# → dist/kalicut-<ver>-macos-arm64.tar.gz
+```
+
+Manual workflow: GitHub → Actions → **macOS arm64** → Run workflow.  
+On tag `v*`, the arm64 tarball is attached to the Release automatically.
+
+First open on macOS (unsigned): System Settings → Privacy & Security → Open Anyway,  
+or `xattr -dr com.apple.quarantine .` inside the unpacked folder.
+
 ## What we intentionally skip (for now)
 
-- Windows / macOS installers  
+- Windows installers  
+- Signed/notarized macOS `.dmg` (needs Apple Developer Program)  
 - Flatpak / Snap (possible later)  
-- Bundled static ffmpeg inside AppImage (legal + size; opt-in later)  
