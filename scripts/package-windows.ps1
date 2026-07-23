@@ -167,23 +167,87 @@ function Invoke-CodeSign {
     }
 }
 
-# --- ffmpeg (static essentials) ---
-$FfmpegZip = Join-Path $Cache "ffmpeg-essentials.zip"
-if (-not (Test-Path $FfmpegZip)) {
-    $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-    Write-Host "==> Downloading ffmpeg essentials"
-    Invoke-WebRequest -Uri $url -OutFile $FfmpegZip -UseBasicParsing
+function Invoke-Download {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [int]$Retries = 4
+    )
+    $dir = Split-Path $OutFile -Parent
+    if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    for ($i = 1; $i -le $Retries; $i++) {
+        try {
+            Write-Host "    try $i/$Retries : $Uri"
+            if (Test-Path $OutFile) { Remove-Item -Force $OutFile }
+            # curl is more reliable than Invoke-WebRequest on flaky hosts
+            $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+            if ($curl) {
+                & curl.exe -fsSL --retry 3 --retry-delay 2 -o $OutFile $Uri
+                if ($LASTEXITCODE -eq 0 -and (Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 1MB)) {
+                    return
+                }
+            } else {
+                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+                if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 1MB)) { return }
+            }
+        } catch {
+            Write-Host "    download error: $($_.Exception.Message)"
+        }
+        Start-Sleep -Seconds (3 * $i)
+    }
+    throw "Failed to download: $Uri"
 }
+
+# --- ffmpeg (static/shared essentials; multiple mirrors) ---
 $FfmpegExtract = Join-Path $Cache "ffmpeg"
-if (-not (Test-Path (Join-Path $FfmpegExtract "ffmpeg.exe"))) {
-    Write-Host "==> Extracting ffmpeg"
-    if (Test-Path $FfmpegExtract) { Remove-Item -Recurse -Force $FfmpegExtract }
-    Expand-Archive -Path $FfmpegZip -DestinationPath $FfmpegExtract -Force
+$FfmpegBin = $null
+$FfprobeBin = $null
+if (Test-Path $FfmpegExtract) {
+    $FfmpegBin = Get-ChildItem -Path $FfmpegExtract -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    $FfprobeBin = Get-ChildItem -Path $FfmpegExtract -Recurse -Filter ffprobe.exe -ErrorAction SilentlyContinue | Select-Object -First 1
 }
-$FfmpegBin = Get-ChildItem -Path $FfmpegExtract -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-$FfprobeBin = Get-ChildItem -Path $FfmpegExtract -Recurse -Filter ffprobe.exe | Select-Object -First 1
 if (-not $FfmpegBin -or -not $FfprobeBin) {
-    throw "ffmpeg.exe / ffprobe.exe not found after extract"
+    Write-Host "==> Downloading ffmpeg"
+    if (Test-Path $FfmpegExtract) { Remove-Item -Recurse -Force $FfmpegExtract }
+    New-Item -ItemType Directory -Force -Path $FfmpegExtract | Out-Null
+
+    # Prefer env override, then gyan essentials, then BtbN GPL shared, then zhongfly ffmpeg 7z
+    $candidates = @()
+    if ($env:FFMPEG_ZIP_URL) { $candidates += $env:FFMPEG_ZIP_URL }
+    $candidates += @(
+        "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
+        "https://github.com/zhongfly/mpv-winbuild/releases/download/2026-07-22-8ab3f8b66d/ffmpeg-x86_64-git-c450bf833.7z"
+    )
+
+    $ok = $false
+    foreach ($url in $candidates) {
+        $ext = if ($url -match '\.7z(\?|$)') { "7z" } else { "zip" }
+        $archive = Join-Path $Cache "ffmpeg-download.$ext"
+        try {
+            Invoke-Download -Uri $url -OutFile $archive
+            if ($ext -eq "7z") {
+                $seven = Get-7Zip
+                & $seven x "-o$FfmpegExtract" "-y" $archive
+                if ($LASTEXITCODE -ne 0) { throw "7z extract failed" }
+            } else {
+                Expand-Archive -Path $archive -DestinationPath $FfmpegExtract -Force
+            }
+            $FfmpegBin = Get-ChildItem -Path $FfmpegExtract -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+            $FfprobeBin = Get-ChildItem -Path $FfmpegExtract -Recurse -Filter ffprobe.exe | Select-Object -First 1
+            if ($FfmpegBin -and $FfprobeBin) {
+                Write-Host "    using mirror: $url"
+                $ok = $true
+                break
+            }
+            throw "archive has no ffmpeg.exe"
+        } catch {
+            Write-Host "    mirror failed: $($_.Exception.Message)"
+            if (Test-Path $FfmpegExtract) { Remove-Item -Recurse -Force $FfmpegExtract }
+            New-Item -ItemType Directory -Force -Path $FfmpegExtract | Out-Null
+        }
+    }
+    if (-not $ok) { throw "Could not download ffmpeg from any mirror" }
 }
 Write-Host "ffmpeg: $($FfmpegBin.FullName)"
 
@@ -205,8 +269,7 @@ if (-not $SkipMpv) {
     $MpvRoot = Join-Path $Cache "mpv-dev"
     if (-not (Test-Path $MpvArchive)) {
         Write-Host "==> Downloading mpv-dev"
-        Write-Host "    $MpvDevUrl"
-        Invoke-WebRequest -Uri $MpvDevUrl -OutFile $MpvArchive -UseBasicParsing
+        Invoke-Download -Uri $MpvDevUrl -OutFile $MpvArchive
     }
     $MpvDllCandidate = Join-Path $MpvRoot "libmpv-2.dll"
     if (-not (Test-Path $MpvDllCandidate)) {
