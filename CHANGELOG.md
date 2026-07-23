@@ -4,12 +4,12 @@
 
 ### Added
 
+- **Windows 10/11 x64** portable zip (`kalicut-*-windows-x86_64.zip`)
+  - `scripts/package-windows.ps1` + Actions `windows.yml`
+  - Bundled `ffmpeg.exe` / `ffprobe.exe`, `KALICUT.bat` launcher
+  - Preview via ffmpeg path (optional `embedded-mpv` feature for Linux/macOS)
 - macOS packaging for **Apple Silicon (arm64)** and **Intel (x86_64)**
-  - `scripts/package-macos.sh` → `dist/kalicut-*-macos-{arm64,x86_64}.tar.gz`
-  - Workflow: `.github/workflows/macos.yml` (matrix: `macos-14` + `macos-13`)
-- macOS **multi-mode signing**: ad-hoc (default), optional Developer ID + notarize
-  - Docs: `docs/MACOS_SIGNING.md`
-  - `unquarantine.sh` helper (`xattr -dr com.apple.quarantine .`)
+- macOS multi-mode signing + `unquarantine.sh`
 
 ## [0.1.1] — 2026-07-22
 

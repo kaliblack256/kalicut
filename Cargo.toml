@@ -18,11 +18,17 @@ path = "src/main.rs"
 name = "kalicut_selftest"
 path = "src/bin/kalicut_selftest.rs"
 
+[features]
+default = ["embedded-mpv"]
+# Embedded libmpv SW preview (Linux/macOS packages). Windows portable uses
+# ffmpeg fallback when built with --no-default-features.
+embedded-mpv = ["dep:libmpv2", "dep:libmpv2-sys"]
+
 [dependencies]
 eframe = { version = "0.31", default-features = true, features = ["default_fonts", "glow"] }
 egui = "0.31"
-libmpv2 = "5"
-libmpv2-sys = "4"
+libmpv2 = { version = "5", optional = true }
+libmpv2-sys = { version = "4", optional = true }
 rfd = "0.15"
 rodio = { version = "0.20", default-features = true }
 serde = { version = "1", features = ["derive"] }

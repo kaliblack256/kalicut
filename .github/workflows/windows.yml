@@ -1,0 +1,53 @@
+# Self-contained Windows x64 portable zip for Win10/11.
+name: Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+
+jobs:
+  windows-x64:
+    name: Windows x64 portable
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build package
+        shell: pwsh
+        run: |
+          ./scripts/package-windows.ps1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kalicut-windows-x86_64
+          path: |
+            dist/kalicut-*-windows-x86_64.zip
+            dist/kalicut-*-windows-x86_64.zip.sha256
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (on tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $zip = (Get-ChildItem dist/kalicut-*-windows-x86_64.zip | Select-Object -First 1).FullName
+          $sum = "$zip.sha256"
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag $zip $sum --clobber
+          } else {
+            gh release create $tag --title "KALICUT $tag" --notes "Windows x64 portable" $zip $sum
+          }

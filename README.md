@@ -50,6 +50,21 @@ tar -xzf kalicut-*-linux-x86_64.tar.gz
 cd kalicut-*-linux-x86_64 && ./kalicut
 ```
 
+### Windows 10 / 11 (64-bit)
+
+| File | For |
+|------|-----|
+| `kalicut-*-windows-x86_64.zip` | Win10/11 x64 |
+
+```bat
+:: unzip, then:
+KALICUT.bat
+:: or double-click kalicut.exe
+```
+
+Portable: `kalicut.exe` + `ffmpeg.exe` + `ffprobe.exe` in the same folder.  
+If SmartScreen blocks: **More info → Run anyway** (unsigned build).
+
 ### macOS
 
 | File | For |

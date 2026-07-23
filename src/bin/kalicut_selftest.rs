@@ -258,17 +258,24 @@ fn main() {
         }
     }
 
-    // --- 5) libmpv load smoke (если есть) ---
-    print!("MPV    init ... ");
-    match libmpv_smoke(files.first().unwrap()) {
-        Ok(msg) => {
-            println!("OK  {msg}");
-            ok += 1;
+    // --- 5) libmpv load smoke (optional feature) ---
+    #[cfg(feature = "embedded-mpv")]
+    {
+        print!("MPV    init ... ");
+        match libmpv_smoke(files.first().unwrap()) {
+            Ok(msg) => {
+                println!("OK  {msg}");
+                ok += 1;
+            }
+            Err(e) => {
+                println!("FAIL  {e}");
+                fails += 1;
+            }
         }
-        Err(e) => {
-            println!("FAIL  {e}");
-            fails += 1;
-        }
+    }
+    #[cfg(not(feature = "embedded-mpv"))]
+    {
+        println!("MPV    init ... SKIP (built without embedded-mpv)");
     }
 
     println!("\n=== TOTAL: ok={ok}  fail={fails} ===");
@@ -459,6 +466,7 @@ fn resolve_preview(
     (w.max(2), h.max(2))
 }
 
+#[cfg(feature = "embedded-mpv")]
 fn libmpv_smoke(path: &Path) -> Result<String, String> {
     use libmpv2::Mpv;
     let mpv = Mpv::with_initializer(|init| {
@@ -473,7 +481,6 @@ fn libmpv_smoke(path: &Path) -> Result<String, String> {
     let p = path.to_string_lossy().to_string();
     mpv.command("loadfile", &[&p, "replace"])
         .map_err(|e| format!("load: {e}"))?;
-    // дать демуксу время
     std::thread::sleep(std::time::Duration::from_millis(400));
     let dur = mpv
         .get_property::<f64>("duration")
