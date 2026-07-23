@@ -62,8 +62,8 @@ KALICUT.bat
 :: or double-click kalicut.exe
 ```
 
-Portable: `kalicut.exe` + `ffmpeg.exe` + `ffprobe.exe` in the same folder.  
-If SmartScreen blocks: **More info → Run anyway** (unsigned build).
+Portable: `kalicut.exe` + **`libmpv-2.dll`** + `ffmpeg.exe` + `ffprobe.exe` in the same folder.  
+If SmartScreen blocks: **More info → Run anyway** (unsigned unless Authenticode secrets are set — [docs/WINDOWS_SIGNING.md](docs/WINDOWS_SIGNING.md)).
 
 ### macOS
 
@@ -137,6 +137,7 @@ Preview quality (Auto / Quality / Speed) only affects on-screen playback, not ex
 |-----|--------|
 | [docs/LINUX.md](docs/LINUX.md) | Linux install, packages, Docker |
 | [docs/MACOS_SIGNING.md](docs/MACOS_SIGNING.md) | Ad-hoc / Developer ID / notarize / xattr |
+| [docs/WINDOWS_SIGNING.md](docs/WINDOWS_SIGNING.md) | libmpv zip, Authenticode / SmartScreen |
 
 ---
 

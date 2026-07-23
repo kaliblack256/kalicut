@@ -20,8 +20,9 @@ path = "src/bin/kalicut_selftest.rs"
 
 [features]
 default = ["embedded-mpv"]
-# Embedded libmpv SW preview (Linux/macOS packages). Windows portable uses
-# ffmpeg fallback when built with --no-default-features.
+# Embedded libmpv SW preview (Linux/macOS/Windows packages).
+# Windows: package-windows.ps1 downloads libmpv-2.dll + builds import lib.
+# Fallback: cargo build --no-default-features → ffmpeg preview only.
 embedded-mpv = ["dep:libmpv2", "dep:libmpv2-sys"]
 
 [dependencies]

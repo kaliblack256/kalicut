@@ -6,10 +6,11 @@
 
 - **Windows 10/11 x64** portable zip (`kalicut-*-windows-x86_64.zip`)
   - `scripts/package-windows.ps1` + Actions `windows.yml`
-  - Bundled `ffmpeg.exe` / `ffprobe.exe`, `KALICUT.bat` launcher
-  - Preview via ffmpeg path (optional `embedded-mpv` feature for Linux/macOS)
+  - Bundled **`libmpv-2.dll`** (embedded preview) + `ffmpeg.exe` / `ffprobe.exe`
+  - Optional **Authenticode** via `WINDOWS_PFX_BASE64` / `WINDOWS_PFX_PASSWORD` secrets
+  - Docs: [docs/WINDOWS_SIGNING.md](docs/WINDOWS_SIGNING.md)
 - macOS packaging for **Apple Silicon (arm64)** and **Intel (x86_64)**
-- macOS multi-mode signing + `unquarantine.sh`
+- macOS multi-mode signing + `unquarantine.sh` (Developer ID via secrets)
 
 ## [0.1.1] — 2026-07-22
 

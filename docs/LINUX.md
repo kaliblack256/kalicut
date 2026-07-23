@@ -225,5 +225,6 @@ xattr -dr com.apple.quarantine .
 ## What we intentionally skip (for now)
 
 - Windows installers  
-- Signed/notarized macOS `.dmg` (needs Apple Developer Program)  
+- Signed/notarized macOS (needs Apple Developer Program secrets — docs/MACOS_SIGNING.md)
+- Windows Authenticode (needs code-signing PFX secrets — docs/WINDOWS_SIGNING.md)  
 - Flatpak / Snap (possible later)  

@@ -1,4 +1,5 @@
 # Self-contained Windows x64 portable zip for Win10/11.
+# Bundles libmpv-2.dll + ffmpeg/ffprobe. Optional Authenticode via secrets.
 name: Windows
 
 on:
@@ -15,6 +16,10 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+      WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+      WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -23,10 +28,12 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Build package
+      - name: Build package (libmpv + optional sign)
         shell: pwsh
         run: |
           ./scripts/package-windows.ps1
+          Get-Content dist/kalicut-*-windows-x86_64/SIGNING.txt -ErrorAction SilentlyContinue
+          Get-ChildItem dist/kalicut-*-windows-x86_64 | Format-Table Name, Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -46,8 +53,13 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           $zip = (Get-ChildItem dist/kalicut-*-windows-x86_64.zip | Select-Object -First 1).FullName
           $sum = "$zip.sha256"
+          # Delete incomplete "starter" assets that block re-upload
+          $assets = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets[] | select(.state!="uploaded") | .id' 2>$null
+          foreach ($id in $assets) {
+            if ($id) { gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$id" 2>$null }
+          }
           if (gh release view $tag 2>$null) {
             gh release upload $tag $zip $sum --clobber
           } else {
-            gh release create $tag --title "KALICUT $tag" --notes "Windows x64 portable" $zip $sum
+            gh release create $tag --title "KALICUT $tag" --notes "Windows x64 portable (libmpv + ffmpeg)" $zip $sum
           }
