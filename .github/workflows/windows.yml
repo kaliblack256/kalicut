@@ -4,6 +4,11 @@ name: Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Attach built zip to this release tag (e.g. v0.1.1). Leave empty to only build artifact."
+        required: false
+        default: ""
   push:
     tags:
       - "v*"
@@ -44,22 +49,37 @@ jobs:
             dist/kalicut-*-windows-x86_64.zip.sha256
           if-no-files-found: error
 
-      - name: Attach to GitHub Release (on tags)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $tag = $env:GITHUB_REF_NAME
+          $tag = if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and '${{ inputs.release_tag }}') {
+            '${{ inputs.release_tag }}'
+          } else {
+            $env:GITHUB_REF_NAME
+          }
+          Write-Host "Attach to release tag: $tag"
           $zip = (Get-ChildItem dist/kalicut-*-windows-x86_64.zip | Select-Object -First 1).FullName
           $sum = "$zip.sha256"
-          # Delete incomplete "starter" assets that block re-upload
-          $assets = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets[] | select(.state!="uploaded") | .id' 2>$null
-          foreach ($id in $assets) {
-            if ($id) { gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$id" 2>$null }
+          $plainSum = Join-Path (Split-Path $zip) ((Split-Path $zip -Leaf) -replace '\.zip$','.SHA256SUMS.txt')
+          Copy-Item $sum $plainSum -Force
+          # Delete incomplete "starter" / previous windows assets that block re-upload
+          $json = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" 2>$null
+          if ($json) {
+            $assets = $json | ConvertFrom-Json | Select-Object -ExpandProperty assets
+            foreach ($a in $assets) {
+              $n = $a.name
+              if ($a.state -ne 'uploaded' -or $n -match 'windows|win64') {
+                Write-Host "DELETE asset $($a.id) $n ($($a.state))"
+                gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$($a.id)" 2>$null | Out-Null
+              }
+            }
           }
           if (gh release view $tag 2>$null) {
-            gh release upload $tag $zip $sum --clobber
+            gh release upload $tag $zip $plainSum --clobber
           } else {
-            gh release create $tag --title "KALICUT $tag" --notes "Windows x64 portable (libmpv + ffmpeg)" $zip $sum
+            gh release create $tag --title "KALICUT $tag" --notes "Windows x64 portable (libmpv + ffmpeg)" $zip $plainSum
           }
+          gh release view $tag --json assets --jq '.assets[] | select(.name|test("windows")) | "\(.name) \(.size)"'
