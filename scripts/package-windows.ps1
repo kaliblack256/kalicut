@@ -237,8 +237,10 @@ if (-not $FfmpegBin -or -not $FfprobeBin) {
     $candidates = @()
     if ($env:FFMPEG_ZIP_URL) { $candidates += $env:FFMPEG_ZIP_URL }
     if ($Arch -eq "aarch64") {
+        # BtbN ships ffmpeg.exe + ffprobe.exe; zhongfly ffmpeg-aarch64 is ffmpeg-only
         $candidates += @(
-            "https://github.com/zhongfly/mpv-winbuild/releases/download/$MpvPinTag/ffmpeg-aarch64-git-$FfmpegPinHash.7z"
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-winarm64-gpl.zip",
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-winarm64-gpl-shared.zip"
         )
     } else {
         $candidates += @(
@@ -268,7 +270,10 @@ if (-not $FfmpegBin -or -not $FfprobeBin) {
                 $ok = $true
                 break
             }
-            throw "archive has no ffmpeg.exe"
+            $have = @()
+            if ($FfmpegBin) { $have += "ffmpeg.exe" } else { $have += "no-ffmpeg" }
+            if ($FfprobeBin) { $have += "ffprobe.exe" } else { $have += "no-ffprobe" }
+            throw "archive incomplete ($($have -join ', '))"
         } catch {
             Write-Host "    mirror failed: $($_.Exception.Message)"
             if (Test-Path $FfmpegExtract) { Remove-Item -Recurse -Force $FfmpegExtract }
