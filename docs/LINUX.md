@@ -12,6 +12,15 @@ Ways to install or run on Linux, from most “packaged” to most DIY.
 
 Packaged builds put `ffmpeg`, `ffprobe`, `libmpv` and other `.so` under a private path and put that directory first on `PATH` / `LD_LIBRARY_PATH`. Cut/export works without installing ffmpeg system-wide.
 
+### Architectures
+
+| Arch | Packages | CI |
+|------|----------|-----|
+| **x86_64** / `amd64` | `.deb`, AppImage, portable `.tar.gz` | `ubuntu-22.04` |
+| **aarch64** / `arm64` | `.deb`, AppImage (best-effort), portable `.tar.gz` | `ubuntu-24.04-arm` |
+
+Local `make all` builds for the **host** arch only. Cross-arch packages come from GitHub Actions (workflow **Linux**).
+
 ---
 
 ## 1. Build from source (any distro)

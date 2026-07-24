@@ -1,0 +1,114 @@
+# Self-contained Linux packages: x86_64 + aarch64
+# deb + portable tar.gz + AppImage (AppImage best-effort on aarch64)
+name: Linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Attach packages to this release tag (e.g. v0.1.1). Empty = artifact only."
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl ca-certificates file git dpkg-dev \
+            libmpv-dev libasound2-dev \
+            libx11-dev libxkbcommon-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libgtk-3-dev libclang-dev \
+            ffmpeg imagemagick \
+            fuse libfuse2 || true
+          pkg-config --modversion mpv
+          ffmpeg -version | head -1
+          uname -m
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Package portable + deb
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/package-portable.sh
+          ./scripts/package-deb.sh
+          ls -lh dist/kalicut-*-linux-*.tar.gz dist/kalicut_*.deb
+
+      - name: Package AppImage
+        continue-on-error: ${{ matrix.arch == 'aarch64' }}
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/package-appimage.sh
+          ls -lh dist/KALICUT-*-${{ matrix.arch }}.AppImage || ls -lh dist/*.AppImage
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum kalicut-*-linux-*.tar.gz kalicut_*.deb KALICUT-*.AppImage 2>/dev/null \
+            | tee SHA256SUMS-linux-${{ matrix.arch }}.txt || true
+          cat SHA256SUMS-linux-${{ matrix.arch }}.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kalicut-linux-${{ matrix.arch }}
+          path: |
+            dist/kalicut-*-linux-*.tar.gz
+            dist/kalicut_*.deb
+            dist/KALICUT-*.AppImage
+            dist/SHA256SUMS-linux-*.txt
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.release_tag }}" ]]; then
+            TAG="${{ inputs.release_tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          ARCH="${{ matrix.arch }}"
+          echo "Attach Linux $ARCH packages to $TAG"
+          mapfile -t BAD < <(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq '.assets[] | select(.state!="uploaded") | .id' 2>/dev/null || true)
+          for id in "${BAD[@]:-}"; do
+            [[ -n "$id" ]] && gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${id}" || true
+          done
+          FILES=()
+          while IFS= read -r f; do FILES+=("$f"); done < <(ls -1 dist/kalicut-*-linux-*.tar.gz dist/kalicut_*.deb 2>/dev/null || true)
+          while IFS= read -r f; do FILES+=("$f"); done < <(ls -1 dist/KALICUT-*.AppImage 2>/dev/null || true)
+          if [[ ${#FILES[@]} -eq 0 ]]; then
+            echo "No packages to upload"; exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber
+          else
+            gh release create "$TAG" --title "KALICUT ${TAG}" --notes "Linux packages" "${FILES[@]}"
+          fi
+          gh release view "$TAG" --json assets --jq '.assets[] | select(.name|test("linux|amd64|arm64|AppImage|\\.deb")) | "\(.name) \(.size)"'

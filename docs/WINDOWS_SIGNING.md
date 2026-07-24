@@ -73,6 +73,22 @@ $env:WINDOWS_PFX_PASSWORD = "your-password"
 
 ---
 
+## Architectures
+
+| Zip | Runner / machine |
+|-----|------------------|
+| `kalicut-*-windows-x86_64.zip` | Win10/11 x64 · CI `windows-latest` |
+| `kalicut-*-windows-aarch64.zip` | Windows on ARM · CI `windows-11-arm` |
+
+Override arch when packaging:
+
+```powershell
+$env:KALICUT_WIN_ARCH = "aarch64"   # or x86_64
+./scripts/package-windows.ps1
+```
+
+Both arches use the same Authenticode secrets when set.
+
 ## Package contents & libmpv
 
 The Windows zip is self-contained:

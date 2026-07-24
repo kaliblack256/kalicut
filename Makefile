@@ -5,13 +5,15 @@ help:
 	@echo "Targets:"
 	@echo "  make deps       - install distro build dependencies"
 	@echo "  make build      - cargo build --release"
-	@echo "  make deb        - .deb with bundled libs"
-	@echo "  make appimage   - AppImage with bundled libs"
-	@echo "  make portable   - portable tar.gz with bundled libs"
-	@echo "  make macos      - macOS arm64 package (run on Mac / CI only)"
-	@echo "  make all        - binary + portable + .deb + AppImage (Linux)"
+	@echo "  make deb        - .deb with bundled libs (host arch)"
+	@echo "  make appimage   - AppImage with bundled libs (host arch)"
+	@echo "  make portable   - portable tar.gz with bundled libs (host arch)"
+	@echo "  make macos      - macOS package (run on Mac / CI only)"
+	@echo "  make all        - binary + portable + .deb + AppImage (Linux host arch)"
 	@echo "  make docker-out - build packages inside Docker → ./dist"
 	@echo "  make clean      - remove dist/ and cargo target/"
+	@echo ""
+	@echo "CI builds both Linux arches (x86_64 + aarch64) and Windows (x64 + ARM)."
 
 deps:
 	./scripts/install-deps.sh

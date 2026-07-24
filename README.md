@@ -28,33 +28,46 @@ Default mode is **stream copy** (`-c copy`): quality stays like the source (no r
 Packages are **self-contained**: `kalicut` + **libmpv** + **ffmpeg/ffprobe** inside.  
 → [All releases](https://github.com/kaliblack256/kalicut/releases)
 
+### Platform matrix
+
+| OS | Arch | Package |
+|----|------|---------|
+| **Linux** | x86_64 | `.deb` · AppImage · `.tar.gz` |
+| **Linux** | aarch64 (ARM64) | `.deb` · AppImage · `.tar.gz` |
+| **Windows** | x86_64 | portable `.zip` (+ libmpv) |
+| **Windows** | aarch64 (ARM64) | portable `.zip` (+ libmpv) |
+| **macOS** | arm64 (Apple Silicon) | `.tar.gz` |
+| **macOS** | x86_64 (Intel) | `.tar.gz` |
+
 ### Linux
 
 | File | For |
 |------|-----|
-| `kalicut_*_amd64.deb` | Debian / Ubuntu / Kali / Mint |
-| `KALICUT-*-x86_64.AppImage` | Most distros |
-| `kalicut-*-linux-x86_64.tar.gz` | Unpack & run |
+| `kalicut_*_amd64.deb` | Debian-family **x86_64** |
+| `kalicut_*_arm64.deb` | Debian-family **ARM64** |
+| `KALICUT-*-x86_64.AppImage` / `*-aarch64.AppImage` | Most distros |
+| `kalicut-*-linux-x86_64.tar.gz` / `*-linux-aarch64.tar.gz` | Unpack & run |
 
 ```bash
-# Debian-family
-sudo apt install ./kalicut_*_amd64.deb
+# Debian-family (pick amd64 or arm64 .deb for your CPU)
+sudo apt install ./kalicut_*.deb
 kalicut
 
 # AppImage
-chmod +x KALICUT-*-x86_64.AppImage
-./KALICUT-*-x86_64.AppImage
+chmod +x KALICUT-*-*.AppImage
+./KALICUT-*-*.AppImage
 
 # Portable
-tar -xzf kalicut-*-linux-x86_64.tar.gz
-cd kalicut-*-linux-x86_64 && ./kalicut
+tar -xzf kalicut-*-linux-*.tar.gz
+cd kalicut-*-linux-* && ./kalicut
 ```
 
-### Windows 10 / 11 (64-bit)
+### Windows 10 / 11
 
 | File | For |
 |------|-----|
-| `kalicut-*-windows-x86_64.zip` | Win10/11 x64 |
+| `kalicut-*-windows-x86_64.zip` | Win10/11 **x64** |
+| `kalicut-*-windows-aarch64.zip` | **Windows on ARM** (Snapdragon, etc.) |
 
 ```bat
 :: unzip, then:

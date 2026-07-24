@@ -1,4 +1,4 @@
-# Self-contained Windows x64 portable zip for Win10/11.
+# Self-contained Windows portable zip (x86_64 + aarch64).
 # Bundles libmpv-2.dll + ffmpeg/ffprobe. Optional Authenticode via secrets.
 name: Windows
 
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Attach built zip to this release tag (e.g. v0.1.1). Leave empty to only build artifact."
+        description: "Attach built zip(s) to this release tag (e.g. v0.1.1). Empty = artifact only."
         required: false
         default: ""
   push:
@@ -16,37 +16,48 @@ on:
     types: [published]
 
 jobs:
-  windows-x64:
-    name: Windows x64 portable
-    runs-on: windows-latest
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x86_64
+            rust_target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            arch: aarch64
+            rust_target: aarch64-pc-windows-msvc
     env:
       WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
       WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
       WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+      KALICUT_WIN_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.rust_target }}
 
       - name: Build package (libmpv + optional sign)
         shell: pwsh
         run: |
           ./scripts/package-windows.ps1
-          Get-Content dist/kalicut-*-windows-x86_64/SIGNING.txt -ErrorAction SilentlyContinue
-          Get-ChildItem dist/kalicut-*-windows-x86_64 | Format-Table Name, Length
+          Get-Content dist/kalicut-*-windows-${{ matrix.arch }}/SIGNING.txt -ErrorAction SilentlyContinue
+          Get-ChildItem dist/kalicut-*-windows-${{ matrix.arch }} | Format-Table Name, Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kalicut-windows-x86_64
+          name: kalicut-windows-${{ matrix.arch }}
           path: |
-            dist/kalicut-*-windows-x86_64.zip
-            dist/kalicut-*-windows-x86_64.zip.sha256
+            dist/kalicut-*-windows-${{ matrix.arch }}.zip
+            dist/kalicut-*-windows-${{ matrix.arch }}.zip.sha256
           if-no-files-found: error
 
       - name: Attach to GitHub Release
@@ -60,18 +71,20 @@ jobs:
           } else {
             $env:GITHUB_REF_NAME
           }
-          Write-Host "Attach to release tag: $tag"
-          $zip = (Get-ChildItem dist/kalicut-*-windows-x86_64.zip | Select-Object -First 1).FullName
+          $arch = '${{ matrix.arch }}'
+          Write-Host "Attach $arch zip to release tag: $tag"
+          $zip = (Get-ChildItem "dist/kalicut-*-windows-$arch.zip" | Select-Object -First 1).FullName
           $sum = "$zip.sha256"
           $plainSum = Join-Path (Split-Path $zip) ((Split-Path $zip -Leaf) -replace '\.zip$','.SHA256SUMS.txt')
           Copy-Item $sum $plainSum -Force
-          # Delete incomplete "starter" / previous windows assets that block re-upload
+          # Only incomplete starters + this arch's previous assets (keep the other arch)
           $json = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" 2>$null
           if ($json) {
             $assets = $json | ConvertFrom-Json | Select-Object -ExpandProperty assets
             foreach ($a in $assets) {
               $n = $a.name
-              if ($a.state -ne 'uploaded' -or $n -match 'windows|win64') {
+              $drop = ($a.state -ne 'uploaded') -or ($n -match [regex]::Escape("windows-$arch"))
+              if ($drop -and ($n -match 'windows|win64')) {
                 Write-Host "DELETE asset $($a.id) $n ($($a.state))"
                 gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$($a.id)" 2>$null | Out-Null
               }
@@ -80,6 +93,6 @@ jobs:
           if (gh release view $tag 2>$null) {
             gh release upload $tag $zip $plainSum --clobber
           } else {
-            gh release create $tag --title "KALICUT $tag" --notes "Windows x64 portable (libmpv + ffmpeg)" $zip $plainSum
+            gh release create $tag --title "KALICUT $tag" --notes "Windows portable (libmpv + ffmpeg)" $zip $plainSum
           }
           gh release view $tag --json assets --jq '.assets[] | select(.name|test("windows")) | "\(.name) \(.size)"'

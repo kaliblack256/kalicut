@@ -4,12 +4,13 @@
 
 ### Added
 
-- **Windows 10/11 x64** portable zip (`kalicut-*-windows-x86_64.zip`)
-  - `scripts/package-windows.ps1` + Actions `windows.yml`
-  - Bundled **`libmpv-2.dll`** (embedded preview) + `ffmpeg.exe` / `ffprobe.exe`
-  - Optional **Authenticode** via `WINDOWS_PFX_BASE64` / `WINDOWS_PFX_PASSWORD` secrets
+- **Full desktop arch matrix** (CI + packages)
+  - Linux **x86_64** + **aarch64** (`.deb`, portable `.tar.gz`, AppImage) — Actions `linux.yml`
+  - Windows **x86_64** + **aarch64** portable zip — matrix in `windows.yml`
+  - macOS **arm64** + **Intel x86_64** (existing)
+- **Windows** portable with bundled **`libmpv-2.dll`** + ffmpeg/ffprobe
+  - Optional **Authenticode** via `WINDOWS_PFX_BASE64` / `WINDOWS_PFX_PASSWORD`
   - Docs: [docs/WINDOWS_SIGNING.md](docs/WINDOWS_SIGNING.md)
-- macOS packaging for **Apple Silicon (arm64)** and **Intel (x86_64)**
 - macOS multi-mode signing + `unquarantine.sh` (Developer ID via secrets)
 
 ## [0.1.1] — 2026-07-22
