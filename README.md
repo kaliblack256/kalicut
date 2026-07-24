@@ -7,7 +7,7 @@ Default mode is **stream copy** (`-c copy`): quality stays like the source (no r
 [![Release](https://img.shields.io/github/v/release/kaliblack256/kalicut)](https://github.com/kaliblack256/kalicut/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Latest release:** [v0.1.1](https://github.com/kaliblack256/kalicut/releases/tag/v0.1.1)
+**Latest release:** [v0.1.2](https://github.com/kaliblack256/kalicut/releases/tag/v0.1.2)
 
 ---
 

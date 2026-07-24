@@ -2,16 +2,23 @@
 
 ## Unreleased
 
+## [0.1.2] — 2026-07-24
+
 ### Added
 
 - **Full desktop arch matrix** (CI + packages)
   - Linux **x86_64** + **aarch64** (`.deb`, portable `.tar.gz`, AppImage) — Actions `linux.yml`
   - Windows **x86_64** + **aarch64** portable zip — matrix in `windows.yml`
-  - macOS **arm64** + **Intel x86_64** (existing)
+  - macOS **arm64** + **Intel x86_64**
 - **Windows** portable with bundled **`libmpv-2.dll`** + ffmpeg/ffprobe
   - Optional **Authenticode** via `WINDOWS_PFX_BASE64` / `WINDOWS_PFX_PASSWORD`
   - Docs: [docs/WINDOWS_SIGNING.md](docs/WINDOWS_SIGNING.md)
 - macOS multi-mode signing + `unquarantine.sh` (Developer ID via secrets)
+
+### Notes
+
+- Signing still optional: macOS ad-hoc / Windows unsigned unless cert secrets are set
+- AppImage on Linux aarch64 is best-effort; portable + `.deb` are required
 
 ## [0.1.1] — 2026-07-22
 
