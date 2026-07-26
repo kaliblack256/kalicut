@@ -23,13 +23,19 @@ pub struct TimelineOutput {
     pub playhead: f64,
     pub changed_range: bool,
     pub seeked: bool,
+    /// Clicked a green keep-clip (index into keep_ranges).
+    pub selected_clip: Option<usize>,
+    /// Double-click on scale → blade at this source time.
+    pub blade_at: Option<f64>,
 }
 
 pub struct TimelineVisuals<'a> {
     pub peaks: Option<&'a [f32]>,
     pub has_video: bool,
-    /// Already saved keep-ranges (drawn under the active selection).
+    /// Kept pieces on the scale (green). Gaps = removed.
     pub keep_ranges: &'a [(f64, f64)],
+    /// Which keep clip is selected (brighter outline).
+    pub selected_clip: Option<usize>,
 }
 
 /// Рисует шкалу (опционально filmstrip + waveform).
@@ -82,6 +88,8 @@ pub fn show_timeline(
 
     let mut changed_range = false;
     let mut seeked = false;
+    let mut selected_clip: Option<usize> = None;
+    let mut blade_at: Option<f64> = None;
 
     // Hit-test по всей области (strip + wave)
     let interact_rect = content;
@@ -193,10 +201,31 @@ pub fn show_timeline(
             state.drag = None;
         }
 
-        if response.clicked() && state.drag.is_none() {
+        // Double-click → blade at click (cut point on the scale)
+        if response.double_clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if interact_rect.contains(pos) {
+                    let t = t_of(pos.x).clamp(0.0, duration);
+                    blade_at = Some(t);
+                    playhead = t;
+                    seeked = true;
+                }
+            }
+        } else if response.clicked() && state.drag.is_none() {
             if let Some(pos) = response.interact_pointer_pos() {
                 if interact_rect.contains(pos) {
                     let mut p = t_of(pos.x).clamp(0.0, duration);
+                    // Prefer selecting a green keep-clip under cursor
+                    let mut hit_clip = None;
+                    for (i, &(ks, ke)) in visuals.keep_ranges.iter().enumerate() {
+                        if p >= ks && p <= ke {
+                            hit_clip = Some(i);
+                            break;
+                        }
+                    }
+                    if let Some(i) = hit_clip {
+                        selected_clip = Some(i);
+                    }
                     p = snap_to(p, &[start, end, 0.0, duration], snap_thr);
                     playhead = p;
                     seeked = true;
@@ -218,8 +247,8 @@ pub fn show_timeline(
         painter.text(
             track.center(),
             egui::Align2::CENTER_CENTER,
-            "video · scrub timeline · play above",
-            egui::FontId::proportional(13.0),
+            "video · scrub · dbl-click=blade · Del=drop clip",
+            egui::FontId::proportional(12.0),
             Color32::from_rgb(120, 120, 140),
         );
     } else {
@@ -232,8 +261,40 @@ pub fn show_timeline(
         );
     }
 
-    // Saved keep segments (green fill)
-    for &(ks, ke) in visuals.keep_ranges {
+    // Dim removed gaps (between keep ranges)
+    if !visuals.keep_ranges.is_empty() {
+        let mut cursor = 0.0_f64;
+        let mut gaps: Vec<(f64, f64)> = Vec::new();
+        let mut sorted: Vec<(f64, f64)> = visuals.keep_ranges.to_vec();
+        sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for &(ks, ke) in &sorted {
+            if ks > cursor + 0.01 {
+                gaps.push((cursor, ks));
+            }
+            cursor = cursor.max(ke);
+        }
+        if cursor < duration - 0.01 {
+            gaps.push((cursor, duration));
+        }
+        for (gs, ge) in gaps {
+            let a = x_of(gs.clamp(0.0, duration));
+            let b = x_of(ge.clamp(0.0, duration));
+            if b > a {
+                let r = Rect::from_min_max(
+                    Pos2::new(a, track.top()),
+                    Pos2::new(b, track.bottom()),
+                );
+                painter.rect_filled(
+                    r,
+                    0.0,
+                    Color32::from_rgba_unmultiplied(180, 50, 50, 40),
+                );
+            }
+        }
+    }
+
+    // Kept segments (green) + cut lines
+    for (i, &(ks, ke)) in visuals.keep_ranges.iter().enumerate() {
         let a = x_of(ks.clamp(0.0, duration));
         let b = x_of(ke.clamp(0.0, duration));
         if b > a {
@@ -241,13 +302,37 @@ pub fn show_timeline(
                 Pos2::new(a, track.top()),
                 Pos2::new(b, track.bottom()),
             );
-            painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(40, 160, 90, 55));
+            let selected = visuals.selected_clip == Some(i);
+            let fill = if selected {
+                Color32::from_rgba_unmultiplied(50, 190, 110, 90)
+            } else {
+                Color32::from_rgba_unmultiplied(40, 160, 90, 55)
+            };
+            let stroke_c = if selected {
+                Color32::from_rgb(120, 255, 170)
+            } else {
+                Color32::from_rgb(60, 200, 110)
+            };
+            painter.rect_filled(r, 0.0, fill);
             painter.rect_stroke(
                 r,
                 0.0,
-                Stroke::new(1.0_f32, Color32::from_rgb(60, 200, 110)),
+                Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, stroke_c),
                 egui::StrokeKind::Middle,
             );
+            // Blade marks at clip edges (except file edges)
+            if ks > 0.02 {
+                painter.line_segment(
+                    [Pos2::new(a, track.top()), Pos2::new(a, track.bottom())],
+                    Stroke::new(1.5_f32, Color32::from_rgb(230, 230, 240)),
+                );
+            }
+            if ke < duration - 0.02 {
+                painter.line_segment(
+                    [Pos2::new(b, track.top()), Pos2::new(b, track.bottom())],
+                    Stroke::new(1.5_f32, Color32::from_rgb(230, 230, 240)),
+                );
+            }
         }
     }
 
@@ -381,6 +466,8 @@ pub fn show_timeline(
             playhead,
             changed_range,
             seeked,
+            selected_clip,
+            blade_at,
         },
     )
 }

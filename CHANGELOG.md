@@ -4,11 +4,10 @@
 
 ### Added
 
-- **CUT edit timeline** (DaVinci Cut–style)
-  - Open file → one full clip on timeline (green)
-  - **Blade (B)** at playhead, **Delete (Del)** clip with ripple
-  - **Ripple delete In–Out** (extract junk), **Keep only In–Out**, **Reset full**
-  - **Cut** exports all remaining clips joined
+- **Multi-cut on the scale only** (no separate CUT panel)
+  - Green = kept clips, dim red gaps = removed
+  - **Double-click** scale / **B** = blade · click clip · **Del** = drop
+  - **X** = extract orange In–Out · **Cut** joins remaining pieces
 
 ## [0.1.2] — 2026-07-24
 
