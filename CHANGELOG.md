@@ -4,9 +4,11 @@
 
 ### Added
 
-- **Multi-cut**: keep several timeline ranges, drop the rest, export as one joined file
-  - «Keep this range» list (green on timeline) → Cut N pieces
-  - Single selection still works without Keep (as before)
+- **CUT edit timeline** (DaVinci Cut–style)
+  - Open file → one full clip on timeline (green)
+  - **Blade (B)** at playhead, **Delete (Del)** clip with ripple
+  - **Ripple delete In–Out** (extract junk), **Keep only In–Out**, **Reset full**
+  - **Cut** exports all remaining clips joined
 
 ## [0.1.2] — 2026-07-24
 

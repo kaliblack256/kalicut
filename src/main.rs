@@ -99,10 +99,11 @@ struct App {
     video_view_w: f32,
     /// Quality превью: авто / качество / скорость (не влияет на обрезку).
     preview_mode: PreviewMode,
-    /// Keep-ranges for multi-cut: remove junk by keeping only these pieces (joined in order).
-    keep_segments: Vec<KeepSegment>,
-    /// Selected row in keep list (for remove / load to handles).
-    keep_selected: Option<usize>,
+    /// Edit timeline (source ranges in play order) — DaVinci Cut style.
+    /// Starts as one full-file clip; Blade splits, Delete removes (ripple).
+    edit_clips: Vec<KeepSegment>,
+    /// Selected clip on the edit timeline.
+    edit_selected: Option<usize>,
 }
 
 impl App {
@@ -112,7 +113,7 @@ impl App {
         let player = PlayerState::new();
         let mpv = MpvPlayer::new();
         let mut status =
-            "Open media → mark range → «Keep» (repeat) → Cut. Or single range without Keep."
+            "Open media · B = Blade · Del = delete clip · Ripple delete In–Out · Cut exports edit."
                 .to_string();
         if mpv.available {
             status.push_str(" · video: embedded mpv (libmpv/hwdec).");
@@ -145,8 +146,8 @@ impl App {
             mpv,
             video_view_w: 480.0,
             preview_mode: PreviewMode::Auto,
-            keep_segments: Vec::new(),
-            keep_selected: None,
+            edit_clips: Vec::new(),
+            edit_selected: None,
         }
     }
 
@@ -268,8 +269,8 @@ impl App {
         self.info = None;
         self.start_sec = 0.0;
         self.end_sec = 0.0;
-        self.keep_segments.clear();
-        self.keep_selected = None;
+        self.edit_clips.clear();
+        self.edit_selected = None;
         self.status = format!("Probing: {}…", path.display());
         self.status_ok = None;
         self.busy = true;
@@ -375,68 +376,185 @@ impl App {
         self.clamp_range();
     }
 
-    fn add_keep_segment(&mut self) {
+    /// Full-file clip on the edit timeline (after open / Reset).
+    fn init_edit_timeline(&mut self) {
+        let d = self.duration();
+        if d <= 0.05 {
+            self.edit_clips.clear();
+            self.edit_selected = None;
+            return;
+        }
+        self.edit_clips = vec![KeepSegment {
+            start: 0.0,
+            end: d,
+        }];
+        self.edit_selected = Some(0);
+        self.start_sec = 0.0;
+        self.end_sec = d;
+    }
+
+    /// Blade (DaVinci Cut / B): split clip under playhead.
+    fn blade_at_playhead(&mut self) {
+        if self.busy || self.edit_clips.is_empty() {
+            return;
+        }
+        let t = self.player.playhead();
+        let min_edge = 0.05_f64;
+        let Some(i) = self
+            .edit_clips
+            .iter()
+            .position(|s| t > s.start + min_edge && t < s.end - min_edge)
+        else {
+            self.status =
+                "Blade: move playhead inside a green clip (not on an edge).".into();
+            self.status_ok = Some(false);
+            return;
+        };
+        let old = self.edit_clips[i];
+        self.edit_clips[i] = KeepSegment {
+            start: old.start,
+            end: t,
+        };
+        self.edit_clips.insert(
+            i + 1,
+            KeepSegment {
+                start: t,
+                end: old.end,
+            },
+        );
+        self.edit_selected = Some(i + 1);
+        self.status = format!(
+            "Blade @ {} · {} clips on timeline",
+            format_seconds(t),
+            self.edit_clips.len()
+        );
+        self.status_ok = Some(true);
+    }
+
+    /// Delete selected clip and close gap (ripple).
+    fn delete_selected_clip(&mut self) {
+        if self.busy {
+            return;
+        }
+        let Some(i) = self.edit_selected else {
+            self.status = "Select a clip in the list, then Delete.".into();
+            self.status_ok = Some(false);
+            return;
+        };
+        if i >= self.edit_clips.len() {
+            return;
+        }
+        if self.edit_clips.len() == 1 {
+            self.status =
+                "Cannot delete the only clip — use Keep only In–Out or Reset.".into();
+            self.status_ok = Some(false);
+            return;
+        }
+        let removed = self.edit_clips.remove(i);
+        self.edit_selected = Some(i.min(self.edit_clips.len().saturating_sub(1)));
+        let total: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
+        self.status = format!(
+            "Deleted {}–{} · {} clips left · program {}",
+            format_seconds(removed.start),
+            format_seconds(removed.end),
+            self.edit_clips.len(),
+            format_seconds(total)
+        );
+        self.status_ok = Some(true);
+    }
+
+    /// Ripple delete In–Out (Extract): drop [In, Out) from all clips.
+    fn ripple_delete_in_out(&mut self) {
+        if self.busy || self.edit_clips.is_empty() {
+            return;
+        }
+        self.clamp_range();
+        let a = self.start_sec;
+        let b = self.end_sec;
+        if b <= a + 0.02 {
+            self.status = "Set In–Out (Start–End) around junk to ripple-delete.".into();
+            self.status_ok = Some(false);
+            return;
+        }
+        let mut new_clips: Vec<KeepSegment> = Vec::new();
+        for s in &self.edit_clips {
+            if s.end <= a + 1e-6 || s.start >= b - 1e-6 {
+                if s.is_valid() {
+                    new_clips.push(*s);
+                }
+                continue;
+            }
+            if s.start < a - 1e-6 {
+                let left = KeepSegment {
+                    start: s.start,
+                    end: a,
+                };
+                if left.is_valid() {
+                    new_clips.push(left);
+                }
+            }
+            if s.end > b + 1e-6 {
+                let right = KeepSegment {
+                    start: b,
+                    end: s.end,
+                };
+                if right.is_valid() {
+                    new_clips.push(right);
+                }
+            }
+        }
+        if new_clips.is_empty() {
+            self.status = "Ripple delete would remove everything — aborted.".into();
+            self.status_ok = Some(false);
+            return;
+        }
+        self.edit_clips = new_clips;
+        self.edit_selected = Some(0);
+        let total: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
+        self.status = format!(
+            "Ripple deleted {}–{} · {} clips · program {}",
+            format_seconds(a),
+            format_seconds(b),
+            self.edit_clips.len(),
+            format_seconds(total)
+        );
+        self.status_ok = Some(true);
+    }
+
+    /// Replace edit with only In–Out selection.
+    fn keep_only_in_out(&mut self) {
+        if self.busy {
+            return;
+        }
         self.clamp_range();
         let seg = KeepSegment {
             start: self.start_sec,
             end: self.end_sec,
         };
         if !seg.is_valid() {
-            self.status = "End must be greater than start to keep this range.".into();
+            self.status = "Set valid In–Out first.".into();
             self.status_ok = Some(false);
             return;
         }
-        // Insert sorted by start; reject heavy overlaps with same window
-        if self
-            .keep_segments
-            .iter()
-            .any(|s| (s.start - seg.start).abs() < 0.02 && (s.end - seg.end).abs() < 0.02)
-        {
-            self.status = "This keep range is already in the list.".into();
-            self.status_ok = Some(false);
-            return;
-        }
-        self.keep_segments.push(seg);
-        self.keep_segments
-            .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
-        self.keep_selected = self.keep_segments.len().checked_sub(1);
-        let total: f64 = self.keep_segments.iter().map(|s| s.duration()).sum();
+        self.edit_clips = vec![seg];
+        self.edit_selected = Some(0);
         self.status = format!(
-            "Kept {}–{} · {} piece(s) · total keep {}",
+            "Timeline = only {}–{} ({})",
             format_seconds(seg.start),
             format_seconds(seg.end),
-            self.keep_segments.len(),
-            format_seconds(total)
+            format_seconds(seg.duration())
         );
         self.status_ok = Some(true);
     }
 
-    fn remove_keep_selected(&mut self) {
-        if let Some(i) = self.keep_selected {
-            if i < self.keep_segments.len() {
-                self.keep_segments.remove(i);
-                self.keep_selected = if self.keep_segments.is_empty() {
-                    None
-                } else {
-                    Some(i.min(self.keep_segments.len() - 1))
-                };
-                self.status = format!(
-                    "Removed keep range · {} left",
-                    self.keep_segments.len()
-                );
-                self.status_ok = Some(true);
-            }
-        }
-    }
-
-    fn load_keep_to_handles(&mut self, i: usize) {
-        if let Some(s) = self.keep_segments.get(i).copied() {
+    fn select_edit_clip(&mut self, i: usize) {
+        if let Some(s) = self.edit_clips.get(i).copied() {
+            self.edit_selected = Some(i);
             self.start_sec = s.start;
             self.end_sec = s.end;
             self.clamp_range();
-            self.keep_selected = Some(i);
             self.player.set_playhead(s.start);
-            if self.info.as_ref().is_some_and(|i| i.has_video) {
+            if self.info.as_ref().is_some_and(|inf| inf.has_video) {
                 if self.use_mpv() {
                     let _ = self.mpv.seek(s.start);
                 } else {
@@ -448,14 +566,13 @@ impl App {
     }
 
     fn export_segments(&self) -> Vec<KeepSegment> {
-        if self.keep_segments.is_empty() {
-            vec![KeepSegment {
-                start: self.start_sec,
-                end: self.end_sec,
-            }]
-        } else {
-            self.keep_segments.clone()
+        if !self.edit_clips.is_empty() {
+            return self.edit_clips.clone();
         }
+        vec![KeepSegment {
+            start: self.start_sec,
+            end: self.end_sec,
+        }]
     }
 
     fn do_trim(&mut self) {
@@ -848,6 +965,7 @@ impl App {
                     );
                     self.player.set_media_duration(duration);
                     self.info = Some(info);
+                    self.init_edit_timeline();
                     self.busy = false;
                     if let Some(ref p) = path {
                         if has_video {
@@ -902,7 +1020,7 @@ impl App {
                     }
                     self.player.set_decoded(Some(decoded));
                     self.decoding = false;
-                    self.status = "Ready. Video + SoundCloud-style timeline · Space = play/pause."
+                    self.status = "Ready · CUT: B=Blade · Del=delete clip · Space=play · Cut exports edit."
                         .into();
                     self.status_ok = Some(true);
                 }
@@ -956,14 +1074,26 @@ impl App {
         self.player.has_audio() || self.info.as_ref().is_some_and(|i| i.has_video)
     }
 
-    /// Space: play/pause (не срабатывает, пока фокус в текстовом поле).
+    /// Space play/pause · B blade · Del delete clip (not while typing).
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
             return;
         }
-        let space = ctx.input(|i| i.key_pressed(egui::Key::Space));
+        let (space, blade, del) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::Space),
+                i.key_pressed(egui::Key::B),
+                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
+            )
+        });
         if space {
             self.toggle_playback();
+        }
+        if blade {
+            self.blade_at_playhead();
+        }
+        if del {
+            self.delete_selected_clip();
         }
     }
 
@@ -1401,7 +1531,7 @@ impl App {
                 if has_timeline {
                     let peaks_ref = peaks_arc.as_ref().map(|a| a.as_slice());
                     let keep_vis: Vec<(f64, f64)> = self
-                        .keep_segments
+                        .edit_clips
                         .iter()
                         .map(|s| (s.start, s.end))
                         .collect();
@@ -1586,8 +1716,8 @@ impl App {
                 let max_t = if duration > 0.0 { duration } else { 24.0 * 3600.0 };
                 let mut start = self.start_sec;
                 let mut end = self.end_sec;
-                let start_changed = time_row(ui, "Start", &mut start, max_t, !self.busy);
-                let end_changed = time_row(ui, "End", &mut end, max_t, !self.busy);
+                let start_changed = time_row(ui, "In", &mut start, max_t, !self.busy);
+                let end_changed = time_row(ui, "Out", &mut end, max_t, !self.busy);
                 if start_changed {
                     self.start_sec = start;
                     self.clamp_range();
@@ -1633,74 +1763,91 @@ impl App {
                     );
                 }
 
-                // Multi-cut: keep several pieces, drop the rest
+                // CUT page (DaVinci-style): blade, delete, ripple extract
                 ui.add_space(6.0);
                 ui.separator();
-                ui.label(egui::RichText::new("Multi-cut (keep pieces)").strong());
+                ui.label(egui::RichText::new("CUT · edit timeline").strong());
                 ui.label(
                     egui::RichText::new(
-                        "Mark a range → Keep. Repeat for each part to keep. Cut joins them in order (junk between is dropped).",
+                        "File opens as one clip (green). Blade at playhead → select junk clip → Delete. Or set In–Out and Ripple delete. Cut exports the timeline.",
                     )
                     .weak()
                     .size(11.0),
                 );
                 ui.horizontal(|ui| {
-                    let can_keep = !self.busy
-                        && has_timeline
-                        && self.selection_duration().is_some();
+                    let can_edit = !self.busy && has_timeline && !self.edit_clips.is_empty();
                     if ui
-                        .add_enabled(can_keep, egui::Button::new("＋ Keep this range"))
-                        .on_hover_text("Add current Start–End to the keep list")
+                        .add_enabled(can_edit, egui::Button::new("Blade (B)"))
+                        .on_hover_text("Split clip under playhead — like DaVinci Cut")
                         .clicked()
                     {
-                        self.add_keep_segment();
+                        self.blade_at_playhead();
                     }
                     if ui
                         .add_enabled(
-                            !self.busy && self.keep_selected.is_some(),
-                            egui::Button::new("Remove"),
+                            can_edit && self.edit_selected.is_some() && self.edit_clips.len() > 1,
+                            egui::Button::new("Delete clip (Del)"),
                         )
+                        .on_hover_text("Remove selected clip; remaining pieces stay (ripple)")
                         .clicked()
                     {
-                        self.remove_keep_selected();
+                        self.delete_selected_clip();
                     }
                     if ui
                         .add_enabled(
-                            !self.busy && !self.keep_segments.is_empty(),
-                            egui::Button::new("Clear all"),
+                            can_edit && self.selection_duration().is_some(),
+                            egui::Button::new("Ripple delete In–Out"),
                         )
+                        .on_hover_text("Extract: remove source range In–Out from the timeline")
                         .clicked()
                     {
-                        self.keep_segments.clear();
-                        self.keep_selected = None;
-                        self.status = "Keep list cleared — Cut will use current Start–End only."
-                            .into();
+                        self.ripple_delete_in_out();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let can_edit = !self.busy && has_timeline;
+                    if ui
+                        .add_enabled(
+                            can_edit && self.selection_duration().is_some(),
+                            egui::Button::new("Keep only In–Out"),
+                        )
+                        .on_hover_text("Replace timeline with just the orange Start–End")
+                        .clicked()
+                    {
+                        self.keep_only_in_out();
+                    }
+                    if ui
+                        .add_enabled(can_edit && self.info.is_some(), egui::Button::new("Reset full"))
+                        .on_hover_text("One clip = whole file again")
+                        .clicked()
+                    {
+                        self.init_edit_timeline();
+                        self.status = "Edit timeline reset to full file.".into();
                         self.status_ok = Some(true);
                     }
                 });
-                if self.keep_segments.is_empty() {
+                if self.edit_clips.is_empty() {
                     ui.label(
-                        egui::RichText::new("No keep list — Cut exports the orange selection only.")
+                        egui::RichText::new("No edit timeline yet — open a file.")
                             .weak()
                             .size(11.0),
                     );
                 } else {
-                    let keep_total: f64 =
-                        self.keep_segments.iter().map(|s| s.duration()).sum();
+                    let prog: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
                     ui.label(format!(
-                        "{} piece(s) · total keep {} · green on timeline",
-                        self.keep_segments.len(),
-                        format_seconds(keep_total)
+                        "{} clip(s) · program length {} · green = kept",
+                        self.edit_clips.len(),
+                        format_seconds(prog)
                     ));
                     egui::ScrollArea::vertical()
-                        .id_salt("keep_list")
-                        .max_height(100.0)
+                        .id_salt("edit_clip_list")
+                        .max_height(110.0)
                         .show(ui, |ui| {
                             let mut load_i = None;
-                            for (i, s) in self.keep_segments.iter().enumerate() {
-                                let selected = self.keep_selected == Some(i);
+                            for (i, s) in self.edit_clips.iter().enumerate() {
+                                let selected = self.edit_selected == Some(i);
                                 let label = format!(
-                                    "#{}  {} – {}  ({})",
+                                    "V1  #{}  {} – {}  ({})",
                                     i + 1,
                                     format_seconds(s.start),
                                     format_seconds(s.end),
@@ -1711,7 +1858,7 @@ impl App {
                                 }
                             }
                             if let Some(i) = load_i {
-                                self.load_keep_to_handles(i);
+                                self.select_edit_clip(i);
                             }
                         });
                 }
@@ -1759,12 +1906,13 @@ impl App {
                 let can_trim = !self.busy
                     && self.tools_ok.is_ok()
                     && self.input_path.is_some()
-                    && (self.selection_duration().is_some() || !self.keep_segments.is_empty());
+                    && !self.edit_clips.is_empty()
+                    && self.edit_clips.iter().all(|s| s.is_valid());
 
-                let cut_label = if self.keep_segments.is_empty() {
+                let cut_label = if self.edit_clips.len() <= 1 {
                     "✂  Cut".to_string()
                 } else {
-                    format!("✂  Cut {} pieces", self.keep_segments.len())
+                    format!("✂  Cut · {} clips", self.edit_clips.len())
                 };
                 let trim_btn = egui::Button::new(egui::RichText::new(cut_label).size(14.0).strong())
                     .min_size(egui::vec2(160.0, 28.0))
@@ -1776,11 +1924,7 @@ impl App {
 
                 if ui
                     .add_enabled(can_trim, trim_btn)
-                    .on_hover_text(if self.keep_segments.is_empty() {
-                        "Export current Start–End selection"
-                    } else {
-                        "Export all keep pieces joined in time order"
-                    })
+                    .on_hover_text("Export edit timeline (all green clips joined in order)")
                     .clicked()
                 {
                     self.do_trim();
