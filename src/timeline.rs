@@ -28,8 +28,6 @@ pub struct TimelineOutput {
 pub struct TimelineVisuals<'a> {
     pub peaks: Option<&'a [f32]>,
     pub has_video: bool,
-    /// Remaining pieces after "Remove" (green). Empty = show full track.
-    pub keep_ranges: &'a [(f64, f64)],
 }
 
 /// Рисует шкалу (опционально filmstrip + waveform).
@@ -218,7 +216,7 @@ pub fn show_timeline(
         painter.text(
             track.center(),
             egui::Align2::CENTER_CENTER,
-            "drag handles · select range to remove",
+            "drag orange handles to select",
             egui::FontId::proportional(12.0),
             Color32::from_rgb(120, 120, 140),
         );
@@ -230,57 +228,6 @@ pub fn show_timeline(
             egui::FontId::proportional(13.0),
             Color32::from_rgb(120, 120, 140),
         );
-    }
-
-    // Dim removed gaps (between keep ranges)
-    if !visuals.keep_ranges.is_empty() {
-        let mut cursor = 0.0_f64;
-        let mut gaps: Vec<(f64, f64)> = Vec::new();
-        let mut sorted: Vec<(f64, f64)> = visuals.keep_ranges.to_vec();
-        sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        for &(ks, ke) in &sorted {
-            if ks > cursor + 0.01 {
-                gaps.push((cursor, ks));
-            }
-            cursor = cursor.max(ke);
-        }
-        if cursor < duration - 0.01 {
-            gaps.push((cursor, duration));
-        }
-        for (gs, ge) in gaps {
-            let a = x_of(gs.clamp(0.0, duration));
-            let b = x_of(ge.clamp(0.0, duration));
-            if b > a {
-                let r = Rect::from_min_max(
-                    Pos2::new(a, track.top()),
-                    Pos2::new(b, track.bottom()),
-                );
-                painter.rect_filled(
-                    r,
-                    0.0,
-                    Color32::from_rgba_unmultiplied(180, 50, 50, 40),
-                );
-            }
-        }
-    }
-
-    // Remaining pieces (green). Dim red gaps = already removed.
-    for &(ks, ke) in visuals.keep_ranges {
-        let a = x_of(ks.clamp(0.0, duration));
-        let b = x_of(ke.clamp(0.0, duration));
-        if b > a {
-            let r = Rect::from_min_max(
-                Pos2::new(a, track.top()),
-                Pos2::new(b, track.bottom()),
-            );
-            painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(40, 160, 90, 55));
-            painter.rect_stroke(
-                r,
-                0.0,
-                Stroke::new(1.0_f32, Color32::from_rgb(60, 200, 110)),
-                egui::StrokeKind::Middle,
-            );
-        }
     }
 
     let sx = x_of(start);

@@ -15,8 +15,8 @@ use encode_settings::{
 };
 use eframe::egui;
 use ffmpeg::{
-    ensure_tools, format_seconds, probe, suggest_output, trim_multi, EncodeMode, FfmpegError,
-    KeepSegment, MediaInfo, MultiTrimRequest,
+    ensure_tools, format_seconds, probe, suggest_output, trim, EncodeMode, FfmpegError, MediaInfo,
+    TrimRequest,
 };
 use mpv_player::{MpvPlayer, EMBED_H, EMBED_W};
 use player::{decode_file, DecodedAudio, PlayerState};
@@ -99,11 +99,6 @@ struct App {
     video_view_w: f32,
     /// Quality превью: авто / качество / скорость (не влияет на обрезку).
     preview_mode: PreviewMode,
-    /// Edit timeline (source ranges in play order) — DaVinci Cut style.
-    /// Starts as one full-file clip; Blade splits, Delete removes (ripple).
-    edit_clips: Vec<KeepSegment>,
-    /// Selected clip on the edit timeline.
-    edit_selected: Option<usize>,
 }
 
 impl App {
@@ -113,7 +108,7 @@ impl App {
         let player = PlayerState::new();
         let mpv = MpvPlayer::new();
         let mut status =
-            "Open a file · drag orange range · Remove · Cut."
+            "Open a file, drag orange range on the waveform, click Cut."
                 .to_string();
         if mpv.available {
             status.push_str(" · video: embedded mpv (libmpv/hwdec).");
@@ -146,8 +141,6 @@ impl App {
             mpv,
             video_view_w: 480.0,
             preview_mode: PreviewMode::Auto,
-            edit_clips: Vec::new(),
-            edit_selected: None,
         }
     }
 
@@ -269,8 +262,6 @@ impl App {
         self.info = None;
         self.start_sec = 0.0;
         self.end_sec = 0.0;
-        self.edit_clips.clear();
-        self.edit_selected = None;
         self.status = format!("Probing: {}…", path.display());
         self.status_ok = None;
         self.busy = true;
@@ -376,136 +367,6 @@ impl App {
         self.clamp_range();
     }
 
-    /// After open: whole file is kept.
-    fn init_edit_timeline(&mut self) {
-        let d = self.duration();
-        if d <= 0.05 {
-            self.edit_clips.clear();
-            self.edit_selected = None;
-            return;
-        }
-        self.edit_clips = vec![KeepSegment {
-            start: 0.0,
-            end: d,
-        }];
-        self.edit_selected = Some(0);
-    }
-
-    /// Remove the orange selection from the result (can repeat).
-    fn remove_selection(&mut self) {
-        if self.busy {
-            return;
-        }
-        if self.edit_clips.is_empty() {
-            self.init_edit_timeline();
-        }
-        if self.edit_clips.is_empty() {
-            self.status = "Open a file first.".into();
-            self.status_ok = Some(false);
-            return;
-        }
-        self.clamp_range();
-        let a = self.start_sec;
-        let b = self.end_sec;
-        if b <= a + 0.05 {
-            self.status = "Drag the orange handles over the part to remove.".into();
-            self.status_ok = Some(false);
-            return;
-        }
-
-        let mut new_clips: Vec<KeepSegment> = Vec::new();
-        for s in &self.edit_clips {
-            if s.end <= a + 1e-6 || s.start >= b - 1e-6 {
-                if s.is_valid() {
-                    new_clips.push(*s);
-                }
-                continue;
-            }
-            if s.start < a - 1e-6 {
-                let left = KeepSegment {
-                    start: s.start,
-                    end: a,
-                };
-                if left.is_valid() {
-                    new_clips.push(left);
-                }
-            }
-            if s.end > b + 1e-6 {
-                let right = KeepSegment {
-                    start: b,
-                    end: s.end,
-                };
-                if right.is_valid() {
-                    new_clips.push(right);
-                }
-            }
-        }
-        if new_clips.is_empty() {
-            self.status = "That would delete the whole file.".into();
-            self.status_ok = Some(false);
-            return;
-        }
-        self.edit_clips = new_clips;
-        self.edit_selected = Some(0);
-        let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
-        self.status = format!(
-            "Removed {}–{}. Left: {}. Remove more or click Cut.",
-            format_seconds(a),
-            format_seconds(b),
-            format_seconds(left)
-        );
-        self.status_ok = Some(true);
-        let d = self.duration();
-        if b < d - 0.1 {
-            self.start_sec = b;
-            self.end_sec = (b + 5.0).min(d);
-        } else if a > 0.1 {
-            self.start_sec = (a - 5.0).max(0.0);
-            self.end_sec = a;
-        }
-        self.clamp_range();
-    }
-
-    fn reset_removals(&mut self) {
-        self.init_edit_timeline();
-        let d = self.duration();
-        self.start_sec = 0.0;
-        self.end_sec = d;
-        self.status = "All removals cleared.".into();
-        self.status_ok = Some(true);
-    }
-
-    fn has_removals(&self) -> bool {
-        if self.edit_clips.is_empty() {
-            return false;
-        }
-        if self.edit_clips.len() > 1 {
-            return true;
-        }
-        let d = self.duration();
-        let only = self.edit_clips[0];
-        only.start > 0.05 || only.end < d - 0.05
-    }
-
-    fn export_segments(&self) -> Vec<KeepSegment> {
-        if self.has_removals() {
-            return self.edit_clips.clone();
-        }
-        if self.end_sec > self.start_sec + 0.02 {
-            return vec![KeepSegment {
-                start: self.start_sec,
-                end: self.end_sec,
-            }];
-        }
-        if !self.edit_clips.is_empty() {
-            return self.edit_clips.clone();
-        }
-        vec![KeepSegment {
-            start: self.start_sec,
-            end: self.end_sec,
-        }]
-    }
-
     fn do_trim(&mut self) {
         if self.busy {
             return;
@@ -521,9 +382,10 @@ impl App {
             return;
         }
 
-        let segments = self.export_segments();
-        if segments.is_empty() || segments.iter().any(|s| !s.is_valid()) {
-            self.status = "Set Start–End range first.".into();
+        let start = self.start_sec;
+        let end = self.end_sec;
+        if end <= start {
+            self.status = "End must be greater than start.".into();
             self.status_ok = Some(false);
             return;
         }
@@ -535,7 +397,6 @@ impl App {
         let has_audio = self.info.as_ref().is_some_and(|i| i.has_audio);
         let reencode = self.reencode.clone();
 
-        // при reencode — выставить расширение контейнера
         if mode == EncodeMode::Reencode {
             output = reencode.with_output_ext(&output);
             self.output_path = output.display().to_string();
@@ -545,34 +406,25 @@ impl App {
         let _ = self.mpv.pause();
         self.player.mark_external(false);
         self.busy = true;
-        let keep_total: f64 = segments.iter().map(|s| s.duration()).sum();
-        self.status = if segments.len() == 1 {
-            format!(
-                "Cutting {} → {} …",
-                format_seconds(segments[0].start),
-                format_seconds(segments[0].end)
-            )
-        } else {
-            format!(
-                "Cutting {} pieces ({} keep) → join …",
-                segments.len(),
-                format_seconds(keep_total)
-            )
-        };
+        self.status = format!(
+            "Cutting {} → {} …",
+            format_seconds(start),
+            format_seconds(end)
+        );
         self.status_ok = None;
 
         let input = input.clone();
-        let n_seg = segments.len();
         let tx = self.tx.clone();
         thread::spawn(move || {
             let re_ref = match mode {
                 EncodeMode::Reencode => Some(&reencode),
                 EncodeMode::StreamCopy => None,
             };
-            let result = trim_multi(MultiTrimRequest {
+            let result = trim(TrimRequest {
                 input: &input,
                 output: &output,
-                segments: &segments,
+                start,
+                end,
                 mode,
                 total_duration: total,
                 has_video,
@@ -580,20 +432,11 @@ impl App {
                 reencode: re_ref,
             })
             .map(|elapsed| {
-                let msg = if n_seg == 1 {
-                    format!(
-                        "Done in {:.2}s → {}",
-                        elapsed.as_secs_f64(),
-                        output.display()
-                    )
-                } else {
-                    format!(
-                        "Done: {} pieces joined in {:.2}s → {}",
-                        n_seg,
-                        elapsed.as_secs_f64(),
-                        output.display()
-                    )
-                };
+                let msg = format!(
+                    "Done in {:.2}s → {}",
+                    elapsed.as_secs_f64(),
+                    output.display()
+                );
                 (output, msg)
             })
             .map_err(|e: FfmpegError| e.to_string());
@@ -896,7 +739,6 @@ impl App {
                     );
                     self.player.set_media_duration(duration);
                     self.info = Some(info);
-                    self.init_edit_timeline();
                     self.busy = false;
                     if let Some(ref p) = path {
                         if has_video {
@@ -951,7 +793,7 @@ impl App {
                     }
                     self.player.set_decoded(Some(decoded));
                     self.decoding = false;
-                    self.status = "Ready. Select junk with orange → Remove → Cut."
+                    self.status = "Ready. Drag orange range on the waveform, then Cut."
                         .into();
                     self.status_ok = Some(true);
                 }
@@ -1005,22 +847,13 @@ impl App {
         self.player.has_audio() || self.info.as_ref().is_some_and(|i| i.has_video)
     }
 
-    /// Space = play · Delete = remove orange range.
+    /// Space: play/pause.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
             return;
         }
-        let (space, del) = ctx.input(|i| {
-            (
-                i.key_pressed(egui::Key::Space),
-                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
-            )
-        });
-        if space {
+        if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.toggle_playback();
-        }
-        if del && !self.busy && self.input_path.is_some() {
-            self.remove_selection();
         }
     }
 
@@ -1457,18 +1290,9 @@ impl App {
                 let mut seeked_ph = None;
                 if has_timeline {
                     let peaks_ref = peaks_arc.as_ref().map(|a| a.as_slice());
-                    let keep_vis: Vec<(f64, f64)> = if self.has_removals() {
-                        self.edit_clips
-                            .iter()
-                            .map(|s| (s.start, s.end))
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
                     let visuals = TimelineVisuals {
                         peaks: peaks_ref,
                         has_video,
-                        keep_ranges: &keep_vis,
                     };
                     let (_, out) = show_timeline(
                         ui,
@@ -1693,37 +1517,6 @@ impl App {
                     );
                 }
 
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let can_rm = !self.busy
-                        && self.input_path.is_some()
-                        && self.selection_duration().is_some();
-                    if ui
-                        .add_enabled(
-                            can_rm,
-                            egui::Button::new("🗑  Remove")
-                                .fill(egui::Color32::from_rgb(140, 55, 55)),
-                        )
-                        .on_hover_text("Delete the orange range from the video")
-                        .clicked()
-                    {
-                        self.remove_selection();
-                    }
-                    if ui
-                        .add_enabled(!self.busy && self.has_removals(), egui::Button::new("Undo removes"))
-                        .clicked()
-                    {
-                        self.reset_removals();
-                    }
-                    if self.has_removals() {
-                        let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
-                        ui.label(
-                            egui::RichText::new(format!("kept {}", format_seconds(left)))
-                                .weak()
-                                .size(11.0),
-                        );
-                    }
-                });
             });
 
             ui.add_space(4.0);
@@ -1765,12 +1558,10 @@ impl App {
             ui.add_space(6.0);
 
             ui.horizontal(|ui| {
-                let segs = self.export_segments();
                 let can_trim = !self.busy
                     && self.tools_ok.is_ok()
                     && self.input_path.is_some()
-                    && !segs.is_empty()
-                    && segs.iter().all(|s| s.is_valid());
+                    && self.selection_duration().is_some();
 
                 let trim_btn = egui::Button::new(egui::RichText::new("✂  Cut").size(14.0).strong())
                     .min_size(egui::vec2(140.0, 28.0))
@@ -1780,15 +1571,7 @@ impl App {
                         egui::Color32::from_rgb(60, 60, 60)
                     });
 
-                if ui
-                    .add_enabled(can_trim, trim_btn)
-                    .on_hover_text(if self.has_removals() {
-                        "Save with removed parts gone"
-                    } else {
-                        "Save orange selection only"
-                    })
-                    .clicked()
-                {
+                if ui.add_enabled(can_trim, trim_btn).clicked() {
                     self.do_trim();
                 }
 

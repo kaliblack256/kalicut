@@ -2,11 +2,9 @@
 
 ## Unreleased
 
-### Added
+### Changed
 
-- **Simple multi-cut**: select junk with orange handles → **Remove** → repeat → **Cut**
-  - Green on the scale = kept; red gaps = removed
-  - No blade / no edit panel — one clear action
+- Simpler cut UX: waveform + one orange range + **Cut** (multi-cut/blade UI removed)
 
 ## [0.1.2] — 2026-07-24
 
