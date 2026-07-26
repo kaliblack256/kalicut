@@ -113,7 +113,7 @@ impl App {
         let player = PlayerState::new();
         let mpv = MpvPlayer::new();
         let mut status =
-            "Open media · scale: dbl-click=blade · click clip · Del=drop · orange=In/Out · Cut"
+            "Open a file · drag orange range · Remove · Cut."
                 .to_string();
         if mpv.available {
             status.push_str(" · video: embedded mpv (libmpv/hwdec).");
@@ -376,7 +376,7 @@ impl App {
         self.clamp_range();
     }
 
-    /// Full-file clip on the edit timeline (after open / Reset).
+    /// After open: whole file is kept.
     fn init_edit_timeline(&mut self) {
         let d = self.duration();
         if d <= 0.05 {
@@ -389,97 +389,30 @@ impl App {
             end: d,
         }];
         self.edit_selected = Some(0);
-        self.start_sec = 0.0;
-        self.end_sec = d;
     }
 
-    /// Blade: split clip under playhead (or explicit time from double-click on scale).
-    fn blade_at_playhead(&mut self) {
-        self.blade_at(None);
-    }
-
-    fn blade_at(&mut self, at: Option<f64>) {
-        if self.busy || self.edit_clips.is_empty() {
-            return;
-        }
-        let t = at.unwrap_or_else(|| self.player.playhead());
-        let min_edge = 0.05_f64;
-        let Some(i) = self
-            .edit_clips
-            .iter()
-            .position(|s| t > s.start + min_edge && t < s.end - min_edge)
-        else {
-            self.status =
-                "Blade: move playhead inside a green clip (not on an edge).".into();
-            self.status_ok = Some(false);
-            return;
-        };
-        let old = self.edit_clips[i];
-        self.edit_clips[i] = KeepSegment {
-            start: old.start,
-            end: t,
-        };
-        self.edit_clips.insert(
-            i + 1,
-            KeepSegment {
-                start: t,
-                end: old.end,
-            },
-        );
-        self.edit_selected = Some(i + 1);
-        self.status = format!(
-            "Blade @ {} · {} clips on timeline",
-            format_seconds(t),
-            self.edit_clips.len()
-        );
-        self.status_ok = Some(true);
-    }
-
-    /// Delete selected clip and close gap (ripple).
-    fn delete_selected_clip(&mut self) {
+    /// Remove the orange selection from the result (can repeat).
+    fn remove_selection(&mut self) {
         if self.busy {
             return;
         }
-        let Some(i) = self.edit_selected else {
-            self.status = "Select a clip in the list, then Delete.".into();
-            self.status_ok = Some(false);
-            return;
-        };
-        if i >= self.edit_clips.len() {
-            return;
+        if self.edit_clips.is_empty() {
+            self.init_edit_timeline();
         }
-        if self.edit_clips.len() == 1 {
-            self.status =
-                "Cannot delete the only clip — use Keep only In–Out or Reset.".into();
+        if self.edit_clips.is_empty() {
+            self.status = "Open a file first.".into();
             self.status_ok = Some(false);
-            return;
-        }
-        let removed = self.edit_clips.remove(i);
-        self.edit_selected = Some(i.min(self.edit_clips.len().saturating_sub(1)));
-        let total: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
-        self.status = format!(
-            "Deleted {}–{} · {} clips left · program {}",
-            format_seconds(removed.start),
-            format_seconds(removed.end),
-            self.edit_clips.len(),
-            format_seconds(total)
-        );
-        self.status_ok = Some(true);
-    }
-
-    /// Ripple delete In–Out (Extract): drop [In, Out) from all clips.
-    fn ripple_delete_in_out(&mut self) {
-        if self.busy || self.edit_clips.is_empty() {
             return;
         }
         self.clamp_range();
         let a = self.start_sec;
         let b = self.end_sec;
-        if b <= a + 0.02 {
-            self.status = "Set In–Out (Start–End) around junk to ripple-delete.".into();
+        if b <= a + 0.05 {
+            self.status = "Drag the orange handles over the part to remove.".into();
             self.status_ok = Some(false);
             return;
         }
+
         let mut new_clips: Vec<KeepSegment> = Vec::new();
         for s in &self.edit_clips {
             if s.end <= a + 1e-6 || s.start >= b - 1e-6 {
@@ -508,56 +441,64 @@ impl App {
             }
         }
         if new_clips.is_empty() {
-            self.status = "Ripple delete would remove everything — aborted.".into();
+            self.status = "That would delete the whole file.".into();
             self.status_ok = Some(false);
             return;
         }
         self.edit_clips = new_clips;
         self.edit_selected = Some(0);
-        let total: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
+        let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
         self.status = format!(
-            "Ripple deleted {}–{} · {} clips · program {}",
+            "Removed {}–{}. Left: {}. Remove more or click Cut.",
             format_seconds(a),
             format_seconds(b),
-            self.edit_clips.len(),
-            format_seconds(total)
+            format_seconds(left)
         );
+        self.status_ok = Some(true);
+        let d = self.duration();
+        if b < d - 0.1 {
+            self.start_sec = b;
+            self.end_sec = (b + 5.0).min(d);
+        } else if a > 0.1 {
+            self.start_sec = (a - 5.0).max(0.0);
+            self.end_sec = a;
+        }
+        self.clamp_range();
+    }
+
+    fn reset_removals(&mut self) {
+        self.init_edit_timeline();
+        let d = self.duration();
+        self.start_sec = 0.0;
+        self.end_sec = d;
+        self.status = "All removals cleared.".into();
         self.status_ok = Some(true);
     }
 
-    fn select_edit_clip(&mut self, i: usize) {
-        if let Some(s) = self.edit_clips.get(i).copied() {
-            self.edit_selected = Some(i);
-            self.start_sec = s.start;
-            self.end_sec = s.end;
-            self.clamp_range();
-            self.player.set_playhead(s.start);
-            if self.info.as_ref().is_some_and(|inf| inf.has_video) {
-                if self.use_mpv() {
-                    let _ = self.mpv.seek(s.start);
-                } else {
-                    self.video.show_still(s.start, true);
-                }
-                self.last_video_still = s.start;
-            }
+    fn has_removals(&self) -> bool {
+        if self.edit_clips.is_empty() {
+            return false;
         }
+        if self.edit_clips.len() > 1 {
+            return true;
+        }
+        let d = self.duration();
+        let only = self.edit_clips[0];
+        only.start > 0.05 || only.end < d - 0.05
     }
 
     fn export_segments(&self) -> Vec<KeepSegment> {
-        // Multi-clip edit after blade/delete → export all remaining pieces
-        if self.edit_clips.len() > 1 {
+        if self.has_removals() {
             return self.edit_clips.clone();
         }
-        if self.edit_clips.len() == 1 {
-            let only = self.edit_clips[0];
-            // Single full-file clip + orange In/Out → classic single-range cut
-            if self.end_sec > self.start_sec + 0.02 {
-                return vec![KeepSegment {
-                    start: self.start_sec.clamp(only.start, only.end),
-                    end: self.end_sec.clamp(only.start, only.end),
-                }];
-            }
-            return vec![only];
+        if self.end_sec > self.start_sec + 0.02 {
+            return vec![KeepSegment {
+                start: self.start_sec,
+                end: self.end_sec,
+            }];
+        }
+        if !self.edit_clips.is_empty() {
+            return self.edit_clips.clone();
         }
         vec![KeepSegment {
             start: self.start_sec,
@@ -582,7 +523,7 @@ impl App {
 
         let segments = self.export_segments();
         if segments.is_empty() || segments.iter().any(|s| !s.is_valid()) {
-            self.status = "Add keep ranges or set a valid Start–End selection.".into();
+            self.status = "Set Start–End range first.".into();
             self.status_ok = Some(false);
             return;
         }
@@ -1010,7 +951,7 @@ impl App {
                     }
                     self.player.set_decoded(Some(decoded));
                     self.decoding = false;
-                    self.status = "Ready · dbl-click scale=blade · Del=drop clip · X=extract In–Out · Space=play."
+                    self.status = "Ready. Select junk with orange → Remove → Cut."
                         .into();
                     self.status_ok = Some(true);
                 }
@@ -1064,30 +1005,22 @@ impl App {
         self.player.has_audio() || self.info.as_ref().is_some_and(|i| i.has_video)
     }
 
-    /// Space play/pause · B blade · Del delete clip (not while typing).
+    /// Space = play · Delete = remove orange range.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
             return;
         }
-        let (space, blade, del, extract) = ctx.input(|i| {
+        let (space, del) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::Space),
-                i.key_pressed(egui::Key::B),
                 i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
-                i.key_pressed(egui::Key::X),
             )
         });
         if space {
             self.toggle_playback();
         }
-        if blade {
-            self.blade_at_playhead();
-        }
-        if del {
-            self.delete_selected_clip();
-        }
-        if extract {
-            self.ripple_delete_in_out();
+        if del && !self.busy && self.input_path.is_some() {
+            self.remove_selection();
         }
     }
 
@@ -1524,16 +1457,18 @@ impl App {
                 let mut seeked_ph = None;
                 if has_timeline {
                     let peaks_ref = peaks_arc.as_ref().map(|a| a.as_slice());
-                    let keep_vis: Vec<(f64, f64)> = self
-                        .edit_clips
-                        .iter()
-                        .map(|s| (s.start, s.end))
-                        .collect();
+                    let keep_vis: Vec<(f64, f64)> = if self.has_removals() {
+                        self.edit_clips
+                            .iter()
+                            .map(|s| (s.start, s.end))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     let visuals = TimelineVisuals {
                         peaks: peaks_ref,
                         has_video,
                         keep_ranges: &keep_vis,
-                        selected_clip: self.edit_selected,
                     };
                     let (_, out) = show_timeline(
                         ui,
@@ -1552,12 +1487,6 @@ impl App {
                     }
                     if out.seeked {
                         seeked_ph = Some(out.playhead);
-                    }
-                    if let Some(i) = out.selected_clip {
-                        self.select_edit_clip(i);
-                    }
-                    if let Some(t) = out.blade_at {
-                        self.blade_at(Some(t));
                     }
                 } else {
                     ui.add_sized(
@@ -1717,8 +1646,8 @@ impl App {
                 let max_t = if duration > 0.0 { duration } else { 24.0 * 3600.0 };
                 let mut start = self.start_sec;
                 let mut end = self.end_sec;
-                let start_changed = time_row(ui, "In", &mut start, max_t, !self.busy);
-                let end_changed = time_row(ui, "Out", &mut end, max_t, !self.busy);
+                let start_changed = time_row(ui, "Start", &mut start, max_t, !self.busy);
+                let end_changed = time_row(ui, "End", &mut end, max_t, !self.busy);
                 if start_changed {
                     self.start_sec = start;
                     self.clamp_range();
@@ -1754,7 +1683,7 @@ impl App {
 
                 if let Some(sel) = self.selection_duration() {
                     ui.label(format!(
-                        "Selection length: {} ({sel:.3} s)",
+                        "Selection: {}",
                         format_seconds(sel)
                     ));
                 } else if self.info.is_some() {
@@ -1764,6 +1693,37 @@ impl App {
                     );
                 }
 
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let can_rm = !self.busy
+                        && self.input_path.is_some()
+                        && self.selection_duration().is_some();
+                    if ui
+                        .add_enabled(
+                            can_rm,
+                            egui::Button::new("🗑  Remove")
+                                .fill(egui::Color32::from_rgb(140, 55, 55)),
+                        )
+                        .on_hover_text("Delete the orange range from the video")
+                        .clicked()
+                    {
+                        self.remove_selection();
+                    }
+                    if ui
+                        .add_enabled(!self.busy && self.has_removals(), egui::Button::new("Undo removes"))
+                        .clicked()
+                    {
+                        self.reset_removals();
+                    }
+                    if self.has_removals() {
+                        let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
+                        ui.label(
+                            egui::RichText::new(format!("kept {}", format_seconds(left)))
+                                .weak()
+                                .size(11.0),
+                        );
+                    }
+                });
             });
 
             ui.add_space(4.0);
@@ -1812,13 +1772,8 @@ impl App {
                     && !segs.is_empty()
                     && segs.iter().all(|s| s.is_valid());
 
-                let cut_label = if segs.len() <= 1 {
-                    "✂  Cut".to_string()
-                } else {
-                    format!("✂  Cut · {} pieces", segs.len())
-                };
-                let trim_btn = egui::Button::new(egui::RichText::new(cut_label).size(14.0).strong())
-                    .min_size(egui::vec2(160.0, 28.0))
+                let trim_btn = egui::Button::new(egui::RichText::new("✂  Cut").size(14.0).strong())
+                    .min_size(egui::vec2(140.0, 28.0))
                     .fill(if can_trim {
                         egui::Color32::from_rgb(40, 120, 80)
                     } else {
@@ -1827,7 +1782,11 @@ impl App {
 
                 if ui
                     .add_enabled(can_trim, trim_btn)
-                    .on_hover_text("Export: orange range if one clip; or all green pieces after blade/delete")
+                    .on_hover_text(if self.has_removals() {
+                        "Save with removed parts gone"
+                    } else {
+                        "Save orange selection only"
+                    })
                     .clicked()
                 {
                     self.do_trim();

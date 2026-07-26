@@ -4,10 +4,9 @@
 
 ### Added
 
-- **Multi-cut on the scale only** (no separate CUT panel)
-  - Green = kept clips, dim red gaps = removed
-  - **Double-click** scale / **B** = blade · click clip · **Del** = drop
-  - **X** = extract orange In–Out · **Cut** joins remaining pieces
+- **Simple multi-cut**: select junk with orange handles → **Remove** → repeat → **Cut**
+  - Green on the scale = kept; red gaps = removed
+  - No blade / no edit panel — one clear action
 
 ## [0.1.2] — 2026-07-24
 

@@ -18,7 +18,7 @@ Default mode is **stream copy** (`-c copy`): quality stays like the source (no r
 - Timeline + SoundCloud-style waveform
 - Embedded **mpv** preview (`hwdec=auto`) · Auto / Quality / Speed
 - ▶ · Space play/pause · magnetic handles · min / sec / ms
-- Multi-cut **on the timeline**: blade, drop clips, extract In–Out (no extra panel)
+- Multi-cut: select junk → **Remove** → **Cut** (repeat Remove as needed)
 - **Stream copy** or **re-encode** (presets + manual)
 - Output: `name_cut.ext`
 
