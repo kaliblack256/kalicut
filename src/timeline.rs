@@ -28,6 +28,8 @@ pub struct TimelineOutput {
 pub struct TimelineVisuals<'a> {
     pub peaks: Option<&'a [f32]>,
     pub has_video: bool,
+    /// Already saved keep-ranges (drawn under the active selection).
+    pub keep_ranges: &'a [(f64, f64)],
 }
 
 /// Рисует шкалу (опционально filmstrip + waveform).
@@ -228,6 +230,25 @@ pub fn show_timeline(
             egui::FontId::proportional(13.0),
             Color32::from_rgb(120, 120, 140),
         );
+    }
+
+    // Saved keep segments (green fill)
+    for &(ks, ke) in visuals.keep_ranges {
+        let a = x_of(ks.clamp(0.0, duration));
+        let b = x_of(ke.clamp(0.0, duration));
+        if b > a {
+            let r = Rect::from_min_max(
+                Pos2::new(a, track.top()),
+                Pos2::new(b, track.bottom()),
+            );
+            painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(40, 160, 90, 55));
+            painter.rect_stroke(
+                r,
+                0.0,
+                Stroke::new(1.0_f32, Color32::from_rgb(60, 200, 110)),
+                egui::StrokeKind::Middle,
+            );
+        }
     }
 
     let sx = x_of(start);

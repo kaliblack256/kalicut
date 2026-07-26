@@ -15,8 +15,8 @@ use encode_settings::{
 };
 use eframe::egui;
 use ffmpeg::{
-    ensure_tools, format_seconds, probe, suggest_output, trim, EncodeMode, FfmpegError, MediaInfo,
-    TrimRequest,
+    ensure_tools, format_seconds, probe, suggest_output, trim_multi, EncodeMode, FfmpegError,
+    KeepSegment, MediaInfo, MultiTrimRequest,
 };
 use mpv_player::{MpvPlayer, EMBED_H, EMBED_W};
 use player::{decode_file, DecodedAudio, PlayerState};
@@ -99,6 +99,10 @@ struct App {
     video_view_w: f32,
     /// Quality превью: авто / качество / скорость (не влияет на обрезку).
     preview_mode: PreviewMode,
+    /// Keep-ranges for multi-cut: remove junk by keeping only these pieces (joined in order).
+    keep_segments: Vec<KeepSegment>,
+    /// Selected row in keep list (for remove / load to handles).
+    keep_selected: Option<usize>,
 }
 
 impl App {
@@ -108,7 +112,8 @@ impl App {
         let player = PlayerState::new();
         let mpv = MpvPlayer::new();
         let mut status =
-            "Open audio or video, select a range, click Cut.".to_string();
+            "Open media → mark range → «Keep» (repeat) → Cut. Or single range without Keep."
+                .to_string();
         if mpv.available {
             status.push_str(" · video: embedded mpv (libmpv/hwdec).");
         } else {
@@ -140,6 +145,8 @@ impl App {
             mpv,
             video_view_w: 480.0,
             preview_mode: PreviewMode::Auto,
+            keep_segments: Vec::new(),
+            keep_selected: None,
         }
     }
 
@@ -261,6 +268,8 @@ impl App {
         self.info = None;
         self.start_sec = 0.0;
         self.end_sec = 0.0;
+        self.keep_segments.clear();
+        self.keep_selected = None;
         self.status = format!("Probing: {}…", path.display());
         self.status_ok = None;
         self.busy = true;
@@ -366,6 +375,89 @@ impl App {
         self.clamp_range();
     }
 
+    fn add_keep_segment(&mut self) {
+        self.clamp_range();
+        let seg = KeepSegment {
+            start: self.start_sec,
+            end: self.end_sec,
+        };
+        if !seg.is_valid() {
+            self.status = "End must be greater than start to keep this range.".into();
+            self.status_ok = Some(false);
+            return;
+        }
+        // Insert sorted by start; reject heavy overlaps with same window
+        if self
+            .keep_segments
+            .iter()
+            .any(|s| (s.start - seg.start).abs() < 0.02 && (s.end - seg.end).abs() < 0.02)
+        {
+            self.status = "This keep range is already in the list.".into();
+            self.status_ok = Some(false);
+            return;
+        }
+        self.keep_segments.push(seg);
+        self.keep_segments
+            .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+        self.keep_selected = self.keep_segments.len().checked_sub(1);
+        let total: f64 = self.keep_segments.iter().map(|s| s.duration()).sum();
+        self.status = format!(
+            "Kept {}–{} · {} piece(s) · total keep {}",
+            format_seconds(seg.start),
+            format_seconds(seg.end),
+            self.keep_segments.len(),
+            format_seconds(total)
+        );
+        self.status_ok = Some(true);
+    }
+
+    fn remove_keep_selected(&mut self) {
+        if let Some(i) = self.keep_selected {
+            if i < self.keep_segments.len() {
+                self.keep_segments.remove(i);
+                self.keep_selected = if self.keep_segments.is_empty() {
+                    None
+                } else {
+                    Some(i.min(self.keep_segments.len() - 1))
+                };
+                self.status = format!(
+                    "Removed keep range · {} left",
+                    self.keep_segments.len()
+                );
+                self.status_ok = Some(true);
+            }
+        }
+    }
+
+    fn load_keep_to_handles(&mut self, i: usize) {
+        if let Some(s) = self.keep_segments.get(i).copied() {
+            self.start_sec = s.start;
+            self.end_sec = s.end;
+            self.clamp_range();
+            self.keep_selected = Some(i);
+            self.player.set_playhead(s.start);
+            if self.info.as_ref().is_some_and(|i| i.has_video) {
+                if self.use_mpv() {
+                    let _ = self.mpv.seek(s.start);
+                } else {
+                    self.video.show_still(s.start, true);
+                }
+                self.last_video_still = s.start;
+            }
+        }
+    }
+
+    fn export_segments(&self) -> Vec<KeepSegment> {
+        if self.keep_segments.is_empty() {
+            vec![KeepSegment {
+                start: self.start_sec,
+                end: self.end_sec,
+            }]
+        } else {
+            self.keep_segments.clone()
+        }
+    }
+
     fn do_trim(&mut self) {
         if self.busy {
             return;
@@ -381,10 +473,9 @@ impl App {
             return;
         }
 
-        let start = self.start_sec;
-        let end = self.end_sec;
-        if end <= start {
-            self.status = "End must be greater than start.".into();
+        let segments = self.export_segments();
+        if segments.is_empty() || segments.iter().any(|s| !s.is_valid()) {
+            self.status = "Add keep ranges or set a valid Start–End selection.".into();
             self.status_ok = Some(false);
             return;
         }
@@ -406,25 +497,34 @@ impl App {
         let _ = self.mpv.pause();
         self.player.mark_external(false);
         self.busy = true;
-        self.status = format!(
-            "Cutting {} → {} …",
-            format_seconds(start),
-            format_seconds(end)
-        );
+        let keep_total: f64 = segments.iter().map(|s| s.duration()).sum();
+        self.status = if segments.len() == 1 {
+            format!(
+                "Cutting {} → {} …",
+                format_seconds(segments[0].start),
+                format_seconds(segments[0].end)
+            )
+        } else {
+            format!(
+                "Cutting {} pieces ({} keep) → join …",
+                segments.len(),
+                format_seconds(keep_total)
+            )
+        };
         self.status_ok = None;
 
         let input = input.clone();
+        let n_seg = segments.len();
         let tx = self.tx.clone();
         thread::spawn(move || {
             let re_ref = match mode {
                 EncodeMode::Reencode => Some(&reencode),
                 EncodeMode::StreamCopy => None,
             };
-            let result = trim(TrimRequest {
+            let result = trim_multi(MultiTrimRequest {
                 input: &input,
                 output: &output,
-                start,
-                end,
+                segments: &segments,
                 mode,
                 total_duration: total,
                 has_video,
@@ -432,11 +532,20 @@ impl App {
                 reencode: re_ref,
             })
             .map(|elapsed| {
-                let msg = format!(
-                    "Done in {:.2}s → {}",
-                    elapsed.as_secs_f64(),
-                    output.display()
-                );
+                let msg = if n_seg == 1 {
+                    format!(
+                        "Done in {:.2}s → {}",
+                        elapsed.as_secs_f64(),
+                        output.display()
+                    )
+                } else {
+                    format!(
+                        "Done: {} pieces joined in {:.2}s → {}",
+                        n_seg,
+                        elapsed.as_secs_f64(),
+                        output.display()
+                    )
+                };
                 (output, msg)
             })
             .map_err(|e: FfmpegError| e.to_string());
@@ -1291,9 +1400,15 @@ impl App {
                 let mut seeked_ph = None;
                 if has_timeline {
                     let peaks_ref = peaks_arc.as_ref().map(|a| a.as_slice());
+                    let keep_vis: Vec<(f64, f64)> = self
+                        .keep_segments
+                        .iter()
+                        .map(|s| (s.start, s.end))
+                        .collect();
                     let visuals = TimelineVisuals {
                         peaks: peaks_ref,
                         has_video,
+                        keep_ranges: &keep_vis,
                     };
                     let (_, out) = show_timeline(
                         ui,
@@ -1517,6 +1632,89 @@ impl App {
                         "End must be greater than start",
                     );
                 }
+
+                // Multi-cut: keep several pieces, drop the rest
+                ui.add_space(6.0);
+                ui.separator();
+                ui.label(egui::RichText::new("Multi-cut (keep pieces)").strong());
+                ui.label(
+                    egui::RichText::new(
+                        "Mark a range → Keep. Repeat for each part to keep. Cut joins them in order (junk between is dropped).",
+                    )
+                    .weak()
+                    .size(11.0),
+                );
+                ui.horizontal(|ui| {
+                    let can_keep = !self.busy
+                        && has_timeline
+                        && self.selection_duration().is_some();
+                    if ui
+                        .add_enabled(can_keep, egui::Button::new("＋ Keep this range"))
+                        .on_hover_text("Add current Start–End to the keep list")
+                        .clicked()
+                    {
+                        self.add_keep_segment();
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.busy && self.keep_selected.is_some(),
+                            egui::Button::new("Remove"),
+                        )
+                        .clicked()
+                    {
+                        self.remove_keep_selected();
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.busy && !self.keep_segments.is_empty(),
+                            egui::Button::new("Clear all"),
+                        )
+                        .clicked()
+                    {
+                        self.keep_segments.clear();
+                        self.keep_selected = None;
+                        self.status = "Keep list cleared — Cut will use current Start–End only."
+                            .into();
+                        self.status_ok = Some(true);
+                    }
+                });
+                if self.keep_segments.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No keep list — Cut exports the orange selection only.")
+                            .weak()
+                            .size(11.0),
+                    );
+                } else {
+                    let keep_total: f64 =
+                        self.keep_segments.iter().map(|s| s.duration()).sum();
+                    ui.label(format!(
+                        "{} piece(s) · total keep {} · green on timeline",
+                        self.keep_segments.len(),
+                        format_seconds(keep_total)
+                    ));
+                    egui::ScrollArea::vertical()
+                        .id_salt("keep_list")
+                        .max_height(100.0)
+                        .show(ui, |ui| {
+                            let mut load_i = None;
+                            for (i, s) in self.keep_segments.iter().enumerate() {
+                                let selected = self.keep_selected == Some(i);
+                                let label = format!(
+                                    "#{}  {} – {}  ({})",
+                                    i + 1,
+                                    format_seconds(s.start),
+                                    format_seconds(s.end),
+                                    format_seconds(s.duration())
+                                );
+                                if ui.selectable_label(selected, label).clicked() {
+                                    load_i = Some(i);
+                                }
+                            }
+                            if let Some(i) = load_i {
+                                self.load_keep_to_handles(i);
+                            }
+                        });
+                }
             });
 
             ui.add_space(4.0);
@@ -1561,19 +1759,30 @@ impl App {
                 let can_trim = !self.busy
                     && self.tools_ok.is_ok()
                     && self.input_path.is_some()
-                    && self.selection_duration().is_some();
+                    && (self.selection_duration().is_some() || !self.keep_segments.is_empty());
 
-                let trim_btn = egui::Button::new(
-                    egui::RichText::new("✂  Cut").size(14.0).strong(),
-                )
-                .min_size(egui::vec2(140.0, 28.0))
-                .fill(if can_trim {
-                    egui::Color32::from_rgb(40, 120, 80)
+                let cut_label = if self.keep_segments.is_empty() {
+                    "✂  Cut".to_string()
                 } else {
-                    egui::Color32::from_rgb(60, 60, 60)
-                });
+                    format!("✂  Cut {} pieces", self.keep_segments.len())
+                };
+                let trim_btn = egui::Button::new(egui::RichText::new(cut_label).size(14.0).strong())
+                    .min_size(egui::vec2(160.0, 28.0))
+                    .fill(if can_trim {
+                        egui::Color32::from_rgb(40, 120, 80)
+                    } else {
+                        egui::Color32::from_rgb(60, 60, 60)
+                    });
 
-                if ui.add_enabled(can_trim, trim_btn).clicked() {
+                if ui
+                    .add_enabled(can_trim, trim_btn)
+                    .on_hover_text(if self.keep_segments.is_empty() {
+                        "Export current Start–End selection"
+                    } else {
+                        "Export all keep pieces joined in time order"
+                    })
+                    .clicked()
+                {
                     self.do_trim();
                 }
 

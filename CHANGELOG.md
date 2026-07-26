@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- **Multi-cut**: keep several timeline ranges, drop the rest, export as one joined file
+  - «Keep this range» list (green on timeline) → Cut N pieces
+  - Single selection still works without Keep (as before)
+
 ## [0.1.2] — 2026-07-24
 
 ### Added
