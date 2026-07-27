@@ -5,7 +5,6 @@ mod ffmpeg;
 mod mpv_player;
 mod player;
 mod preview_quality;
-mod time_edit;
 mod timeline;
 mod video_viz;
 
@@ -24,7 +23,6 @@ use preview_quality::{machine_hint, resolve_preview_size, PreviewMode};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use time_edit::time_row;
 use timeline::{show_timeline, TimelineState, TimelineVisuals};
 use video_viz::{StreamProfile, VideoStream};
 
@@ -114,7 +112,7 @@ impl App {
         let player = PlayerState::new();
         let mpv = MpvPlayer::new();
         let mut status =
-            "B = blade · click piece · Delete · Cut  (Ctrl+Z undo)"
+            "B · click piece · Delete · Cut"
                 .to_string();
         if mpv.available {
             status.push_str(" · video: embedded mpv (libmpv/hwdec).");
@@ -366,18 +364,7 @@ impl App {
         }
     }
 
-    fn set_full_range(&mut self) {
-        self.start_sec = 0.0;
-        self.end_sec = self.duration();
-        self.clamp_range();
-    }
 
-    fn apply_preset(&mut self, start: f64, end: f64) {
-        let d = self.duration();
-        self.start_sec = start.clamp(0.0, d);
-        self.end_sec = end.clamp(self.start_sec + 0.05, d.max(self.start_sec + 0.05));
-        self.clamp_range();
-    }
 
 
     fn init_edit_timeline(&mut self) {
@@ -417,17 +404,6 @@ impl App {
         }
     }
 
-    fn has_removals(&self) -> bool {
-        if self.edit_clips.is_empty() {
-            return false;
-        }
-        if self.edit_clips.len() > 1 {
-            return true;
-        }
-        let d = self.duration();
-        let only = self.edit_clips[0];
-        only.start > 0.05 || only.end < d - 0.05
-    }
 
     /// Click green clip on the scale.
     fn select_clip(&mut self, i: usize) {
@@ -542,26 +518,17 @@ impl App {
     }
 
     fn export_segments(&self) -> Vec<KeepSegment> {
-        // After B/Delete editing → join remaining green pieces
-        if self.has_removals() || self.edit_clips.len() > 1 {
-            if !self.edit_clips.is_empty() {
-                return self.edit_clips.clone();
-            }
-        }
-        // Simple single-range cut (no multi blade)
-        if self.end_sec > self.start_sec + 0.02 {
-            return vec![KeepSegment {
-                start: self.start_sec,
-                end: self.end_sec,
-            }];
-        }
         if !self.edit_clips.is_empty() {
             return self.edit_clips.clone();
         }
-        vec![KeepSegment {
-            start: self.start_sec,
-            end: self.end_sec,
-        }]
+        let d = self.duration();
+        if d > 0.05 {
+            return vec![KeepSegment {
+                start: 0.0,
+                end: d,
+            }];
+        }
+        vec![]
     }
 
     fn do_trim(&mut self) {
@@ -581,7 +548,7 @@ impl App {
 
         let segments = self.export_segments();
         if segments.is_empty() || segments.iter().any(|s| !s.is_valid()) {
-            self.status = "Blade (B) and keep pieces, or set orange range.".into();
+            self.status = "Nothing to export.".into();
             self.status_ok = Some(false);
             return;
         }
@@ -995,7 +962,7 @@ impl App {
                     }
                     self.player.set_decoded(Some(decoded));
                     self.decoding = false;
-                    self.status = "Ready · B blade · click piece · Delete · Cut"
+                    self.status = "B · click · Delete · Cut"
                         .into();
                     self.status_ok = Some(true);
                 }
@@ -1524,17 +1491,10 @@ impl App {
                         ui,
                         &mut self.timeline,
                         duration,
-                        self.start_sec,
-                        self.end_sec,
                         playhead,
                         visuals,
                         !self.busy,
                     );
-                    if out.changed_range {
-                        self.start_sec = out.start;
-                        self.end_sec = out.end;
-                        self.clamp_range();
-                    }
                     if out.seeked {
                         seeked_ph = Some(out.playhead);
                     }
@@ -1695,68 +1655,7 @@ impl App {
                 });
 
                 ui.add_space(4.0);
-
-                let max_t = if duration > 0.0 { duration } else { 24.0 * 3600.0 };
-                let mut start = self.start_sec;
-                let mut end = self.end_sec;
-                let start_changed = time_row(ui, "Start", &mut start, max_t, !self.busy);
-                let end_changed = time_row(ui, "End", &mut end, max_t, !self.busy);
-                if start_changed {
-                    self.start_sec = start;
-                    self.clamp_range();
-                }
-                if end_changed {
-                    self.end_sec = end;
-                    self.clamp_range();
-                }
-
-                ui.add_space(6.0);
-
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(!self.busy && has_timeline, egui::Button::new("Whole file"))
-                        .clicked()
-                    {
-                        self.set_full_range();
-                    }
-                    if has_timeline {
-                        let d = duration;
-                        if ui.button("First 30s").clicked() {
-                            self.apply_preset(0.0, d.min(30.0));
-                        }
-                        if ui.button("Last 30s").clicked() {
-                            self.apply_preset((d - 30.0).max(0.0), d);
-                        }
-                        if ui.button("Middle 30s").clicked() {
-                            let mid = d / 2.0;
-                            self.apply_preset((mid - 15.0).max(0.0), (mid + 15.0).min(d));
-                        }
-                    }
-                });
-
-                if let Some(sel) = self.selection_duration() {
-                    ui.label(format!(
-                        "Selection: {}",
-                        format_seconds(sel)
-                    ));
-                } else if self.info.is_some() {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 140, 60),
-                        "End must be greater than start",
-                    );
-                }
-
-                if has_timeline {
-                    ui.label(
-                        egui::RichText::new("B blade · click green piece · Delete · Cut")
-                            .weak()
-                            .size(11.0),
-                    );
-                }
-
             });
-
-            ui.add_space(4.0);
 
             // --- Режим и выход ---
             ui.group(|ui| {
