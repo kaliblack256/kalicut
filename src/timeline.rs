@@ -78,33 +78,34 @@ pub fn show_timeline(
     }
 
     if enabled {
+        // Use latest pointer X so click position is reliable (not lost after release).
+        let pointer_x = response
+            .interact_pointer_pos()
+            .map(|p| p.x)
+            .or_else(|| ui.input(|i| i.pointer.interact_pos().map(|p| p.x)))
+            .or_else(|| ui.input(|i| i.pointer.hover_pos().map(|p| p.x)));
+
         if response.drag_started() {
             if let Some(pos) = response.interact_pointer_pos() {
                 if track.contains(pos) {
                     state.drag = Some(DragTarget::Playhead);
-                    playhead = t_of(pos.x).clamp(0.0, duration);
-                    seeked = true;
                 }
             }
         }
 
-        if response.dragged() {
-            if let (Some(DragTarget::Playhead), Some(pos)) =
-                (state.drag, response.interact_pointer_pos())
-            {
-                playhead = t_of(pos.x).clamp(0.0, duration);
+        if response.dragged() && matches!(state.drag, Some(DragTarget::Playhead)) {
+            if let Some(x) = pointer_x {
+                playhead = t_of(x).clamp(0.0, duration);
                 seeked = true;
             }
         }
 
-        if response.drag_stopped() {
-            state.drag = None;
-        }
-
-        if response.clicked() && state.drag.is_none() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                if track.contains(pos) {
-                    let p = t_of(pos.x).clamp(0.0, duration);
+        // Click: set playhead to click X and select the clip under cursor.
+        // Do not require drag.is_none() — that skipped the click after drag_started.
+        if response.clicked() {
+            if let Some(x) = pointer_x {
+                if x >= track.left() && x <= track.right() {
+                    let p = t_of(x).clamp(0.0, duration);
                     for (i, &(ks, ke)) in visuals.keep_ranges.iter().enumerate() {
                         if p >= ks && p <= ke {
                             selected_clip = Some(i);
@@ -115,6 +116,10 @@ pub fn show_timeline(
                     seeked = true;
                 }
             }
+        }
+
+        if response.drag_stopped() {
+            state.drag = None;
         }
     }
 

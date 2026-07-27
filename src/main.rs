@@ -405,7 +405,8 @@ impl App {
     }
 
 
-    /// Click green clip on the scale.
+    /// Click green clip on the scale. Does **not** move the playhead
+    /// (caller keeps the click position so the line does not jump to 0 / clip start).
     fn select_clip(&mut self, i: usize) {
         if i >= self.edit_clips.len() {
             return;
@@ -415,15 +416,6 @@ impl App {
         self.start_sec = s.start;
         self.end_sec = s.end;
         self.clamp_range();
-        self.player.set_playhead(s.start);
-        if self.info.as_ref().is_some_and(|inf| inf.has_video) {
-            if self.use_mpv() {
-                let _ = self.mpv.seek(s.start);
-            } else {
-                self.video.show_still(s.start, true);
-            }
-            self.last_video_still = s.start;
-        }
         self.status = format!(
             "Selected #{}  {}–{}  · Delete to drop",
             i + 1,
@@ -1495,11 +1487,12 @@ impl App {
                         visuals,
                         !self.busy,
                     );
-                    if out.seeked {
-                        seeked_ph = Some(out.playhead);
-                    }
+                    // Select clip first (does not move playhead), then seek to click.
                     if let Some(i) = out.selected_clip {
                         self.select_clip(i);
+                    }
+                    if out.seeked {
+                        seeked_ph = Some(out.playhead);
                     }
                 } else {
                     ui.add_sized(
