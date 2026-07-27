@@ -4,9 +4,9 @@
 
 ### Added
 
-- **Cut like Resolve**: select junk on the waveform → **Delete** → repeat → **Cut**
-  - **I** / **O** marks · **B** split (optional) · **Ctrl+Z** undo · **X** = same as Delete
-  - Waveform kept; green = remaining after deletes
+- **Cut like Resolve**: **B** blade → click green piece → **Delete** → **Cut**
+  - Waveform; white cut lines; bright = selected; Ctrl+Z undo
+  - No I/O keys
 
 ## [0.1.2] — 2026-07-24
 

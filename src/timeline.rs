@@ -23,13 +23,17 @@ pub struct TimelineOutput {
     pub playhead: f64,
     pub changed_range: bool,
     pub seeked: bool,
+    /// Clicked green clip index (Blade pieces).
+    pub selected_clip: Option<usize>,
 }
 
 pub struct TimelineVisuals<'a> {
     pub peaks: Option<&'a [f32]>,
     pub has_video: bool,
-    /// Kept source ranges after I/O + X / B + Del (green on waveform).
+    /// Clips on the scale after B splits (green).
     pub keep_ranges: &'a [(f64, f64)],
+    /// Selected clip (bright outline) — Delete removes this.
+    pub selected_clip: Option<usize>,
 }
 
 /// Рисует шкалу (опционально filmstrip + waveform).
@@ -82,6 +86,7 @@ pub fn show_timeline(
 
     let mut changed_range = false;
     let mut seeked = false;
+    let mut selected_clip: Option<usize> = None;
 
     // Hit-test по всей области (strip + wave)
     let interact_rect = content;
@@ -197,6 +202,13 @@ pub fn show_timeline(
             if let Some(pos) = response.interact_pointer_pos() {
                 if interact_rect.contains(pos) {
                     let mut p = t_of(pos.x).clamp(0.0, duration);
+                    // Click a green clip to select it (then Delete)
+                    for (i, &(ks, ke)) in visuals.keep_ranges.iter().enumerate() {
+                        if p >= ks && p <= ke {
+                            selected_clip = Some(i);
+                            break;
+                        }
+                    }
                     p = snap_to(p, &[start, end, 0.0, duration], snap_thr);
                     playhead = p;
                     seeked = true;
@@ -218,7 +230,7 @@ pub fn show_timeline(
         painter.text(
             track.center(),
             egui::Align2::CENTER_CENTER,
-            "select range · Delete removes it",
+            "B = blade · click clip · Delete",
             egui::FontId::proportional(11.0),
             Color32::from_rgb(120, 120, 140),
         );
@@ -232,7 +244,7 @@ pub fn show_timeline(
         );
     }
 
-    // Green = kept after keyboard edits; dim red = removed gaps
+    // Clips (green). Selected = bright. Gaps = removed (dim red).
     if !visuals.keep_ranges.is_empty() {
         let mut cursor = 0.0_f64;
         let mut sorted: Vec<(f64, f64)> = visuals.keep_ranges.to_vec();
@@ -268,7 +280,7 @@ pub fn show_timeline(
                 );
             }
         }
-        for &(ks, ke) in visuals.keep_ranges {
+        for (i, &(ks, ke)) in visuals.keep_ranges.iter().enumerate() {
             let a = x_of(ks.clamp(0.0, duration));
             let b = x_of(ke.clamp(0.0, duration));
             if b > a {
@@ -276,13 +288,42 @@ pub fn show_timeline(
                     Pos2::new(a, track.top()),
                     Pos2::new(b, track.bottom()),
                 );
-                painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(40, 160, 90, 50));
+                let sel = visuals.selected_clip == Some(i);
+                painter.rect_filled(
+                    r,
+                    0.0,
+                    if sel {
+                        Color32::from_rgba_unmultiplied(55, 200, 120, 95)
+                    } else {
+                        Color32::from_rgba_unmultiplied(40, 160, 90, 50)
+                    },
+                );
                 painter.rect_stroke(
                     r,
                     0.0,
-                    Stroke::new(1.0_f32, Color32::from_rgb(60, 200, 110)),
+                    Stroke::new(
+                        if sel { 2.5_f32 } else { 1.0_f32 },
+                        if sel {
+                            Color32::from_rgb(140, 255, 190)
+                        } else {
+                            Color32::from_rgb(60, 200, 110)
+                        },
+                    ),
                     egui::StrokeKind::Middle,
                 );
+                // blade lines at inner edges
+                if ks > 0.02 {
+                    painter.line_segment(
+                        [Pos2::new(a, track.top()), Pos2::new(a, track.bottom())],
+                        Stroke::new(1.5_f32, Color32::from_rgb(240, 240, 250)),
+                    );
+                }
+                if ke < duration - 0.02 {
+                    painter.line_segment(
+                        [Pos2::new(b, track.top()), Pos2::new(b, track.bottom())],
+                        Stroke::new(1.5_f32, Color32::from_rgb(240, 240, 250)),
+                    );
+                }
             }
         }
     }
@@ -417,6 +458,7 @@ pub fn show_timeline(
             playhead,
             changed_range,
             seeked,
+            selected_clip,
         },
     )
 }

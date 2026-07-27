@@ -99,8 +99,10 @@ struct App {
     video_view_w: f32,
     /// Quality превью: авто / качество / скорость (не влияет на обрезку).
     preview_mode: PreviewMode,
-    /// Remaining source ranges after hotkey edits (Resolve-style).
+    /// Clips after B (blade). Click one, then Delete.
     edit_clips: Vec<KeepSegment>,
+    /// Selected green clip index.
+    edit_selected: Option<usize>,
     /// Undo stack of edit_clips snapshots.
     edit_undo: Vec<Vec<KeepSegment>>,
 }
@@ -112,7 +114,7 @@ impl App {
         let player = PlayerState::new();
         let mpv = MpvPlayer::new();
         let mut status =
-            "Select on waveform → Delete · Cut when done  (I/O marks · B split · Ctrl+Z)"
+            "B = blade · click piece · Delete · Cut  (Ctrl+Z undo)"
                 .to_string();
         if mpv.available {
             status.push_str(" · video: embedded mpv (libmpv/hwdec).");
@@ -146,6 +148,7 @@ impl App {
             video_view_w: 480.0,
             preview_mode: PreviewMode::Auto,
             edit_clips: Vec::new(),
+            edit_selected: None,
             edit_undo: Vec::new(),
         }
     }
@@ -269,6 +272,7 @@ impl App {
         self.start_sec = 0.0;
         self.end_sec = 0.0;
         self.edit_clips.clear();
+        self.edit_selected = None;
         self.edit_undo.clear();
         self.status = format!("Probing: {}…", path.display());
         self.status_ok = None;
@@ -380,12 +384,14 @@ impl App {
         let d = self.duration();
         if d <= 0.05 {
             self.edit_clips.clear();
+            self.edit_selected = None;
             return;
         }
         self.edit_clips = vec![KeepSegment {
             start: 0.0,
             end: d,
         }];
+        self.edit_selected = Some(0);
         self.edit_undo.clear();
     }
 
@@ -399,8 +405,14 @@ impl App {
     fn undo_edit(&mut self) {
         if let Some(prev) = self.edit_undo.pop() {
             self.edit_clips = prev;
+            if self.edit_clips.is_empty() {
+                self.edit_selected = None;
+            } else {
+                self.edit_selected =
+                    Some(self.edit_selected.unwrap_or(0).min(self.edit_clips.len() - 1));
+            }
             let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
-            self.status = format!("Undo · kept {}", format_seconds(left));
+            self.status = format!("Undo · {} piece(s) · {}", self.edit_clips.len(), format_seconds(left));
             self.status_ok = Some(true);
         }
     }
@@ -417,111 +429,35 @@ impl App {
         only.start > 0.05 || only.end < d - 0.05
     }
 
-    /// I — mark In at playhead.
-    fn mark_in(&mut self) {
-        if self.busy || self.input_path.is_none() {
+    /// Click green clip on the scale.
+    fn select_clip(&mut self, i: usize) {
+        if i >= self.edit_clips.len() {
             return;
         }
-        let t = self.player.playhead().clamp(0.0, self.duration().max(0.0));
-        self.start_sec = t;
-        if self.end_sec <= self.start_sec {
-            self.end_sec = (t + 1.0).min(self.duration().max(t + 0.05));
-        }
+        self.edit_selected = Some(i);
+        let s = self.edit_clips[i];
+        self.start_sec = s.start;
+        self.end_sec = s.end;
         self.clamp_range();
-        self.status = format!("In {}", format_seconds(self.start_sec));
-        self.status_ok = Some(true);
-    }
-
-    /// O — mark Out at playhead.
-    fn mark_out(&mut self) {
-        if self.busy || self.input_path.is_none() {
-            return;
-        }
-        let t = self.player.playhead().clamp(0.0, self.duration().max(0.0));
-        self.end_sec = t;
-        if self.end_sec <= self.start_sec {
-            self.start_sec = (t - 1.0).max(0.0);
-        }
-        self.clamp_range();
-        self.status = format!("Out {}", format_seconds(self.end_sec));
-        self.status_ok = Some(true);
-    }
-
-    /// Delete selection (like Resolve: select → Del). Removes orange range, closes gap.
-    fn delete_selection(&mut self) {
-        if self.busy || self.input_path.is_none() {
-            return;
-        }
-        if self.edit_clips.is_empty() {
-            self.init_edit_timeline();
-        }
-        self.clamp_range();
-        let a = self.start_sec;
-        let b = self.end_sec;
-        if b <= a + 0.05 {
-            self.status = "Drag orange range over junk, then Delete.".into();
-            self.status_ok = Some(false);
-            return;
-        }
-        self.push_undo();
-        let mut new_clips: Vec<KeepSegment> = Vec::new();
-        for s in &self.edit_clips {
-            if s.end <= a + 1e-6 || s.start >= b - 1e-6 {
-                if s.is_valid() {
-                    new_clips.push(*s);
-                }
-                continue;
+        self.player.set_playhead(s.start);
+        if self.info.as_ref().is_some_and(|inf| inf.has_video) {
+            if self.use_mpv() {
+                let _ = self.mpv.seek(s.start);
+            } else {
+                self.video.show_still(s.start, true);
             }
-            if s.start < a - 1e-6 {
-                let left = KeepSegment {
-                    start: s.start,
-                    end: a,
-                };
-                if left.is_valid() {
-                    new_clips.push(left);
-                }
-            }
-            if s.end > b + 1e-6 {
-                let right = KeepSegment {
-                    start: b,
-                    end: s.end,
-                };
-                if right.is_valid() {
-                    new_clips.push(right);
-                }
-            }
+            self.last_video_still = s.start;
         }
-        if new_clips.is_empty() {
-            let _ = self.edit_undo.pop();
-            self.status = "That would delete the whole file.".into();
-            self.status_ok = Some(false);
-            return;
-        }
-        self.edit_clips = new_clips;
-        let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
         self.status = format!(
-            "Deleted · kept {} · select next junk or Cut",
-            format_seconds(left)
+            "Selected #{}  {}–{}  · Delete to drop",
+            i + 1,
+            format_seconds(s.start),
+            format_seconds(s.end)
         );
         self.status_ok = Some(true);
-
-        // Like Resolve: continue after the cut
-        let d = self.duration();
-        self.player.set_playhead(b.clamp(0.0, d));
-        if self.use_mpv() {
-            let _ = self.mpv.seek(b.clamp(0.0, d));
-        }
-        if b < d - 0.15 {
-            self.start_sec = b;
-            self.end_sec = (b + (b - a).clamp(0.5, 8.0)).min(d);
-        } else if a > 0.15 {
-            self.start_sec = (a - 3.0).max(0.0);
-            self.end_sec = a;
-        }
-        self.clamp_range();
     }
 
-    /// B — split at playhead (optional; main flow is select → Del).
+    /// B — blade at playhead (repeat to slice more).
     fn blade_at_playhead(&mut self) {
         if self.busy || self.input_path.is_none() {
             return;
@@ -536,7 +472,7 @@ impl App {
             .iter()
             .position(|s| t > s.start + min_edge && t < s.end - min_edge)
         else {
-            self.status = "Move playhead onto the clip, then B.".into();
+            self.status = "Put playhead on a green piece, then B.".into();
             self.status_ok = Some(false);
             return;
         };
@@ -553,18 +489,66 @@ impl App {
                 end: old.end,
             },
         );
-        // Select the right piece as orange (easy to Del if junk is to the right)
-        self.start_sec = t;
-        self.end_sec = old.end;
-        self.clamp_range();
-        self.status = format!("Split @ {} · select piece → Delete", format_seconds(t));
+        // Don't force selection — user clicks the junk piece
+        self.edit_selected = None;
+        self.status = format!(
+            "Blade @ {} · {} pieces · click one → Delete",
+            format_seconds(t),
+            self.edit_clips.len()
+        );
+        self.status_ok = Some(true);
+    }
+
+    /// Delete — drop the clicked/selected green piece.
+    fn delete_selected_clip(&mut self) {
+        if self.busy || self.input_path.is_none() {
+            return;
+        }
+        if self.edit_clips.is_empty() {
+            self.init_edit_timeline();
+        }
+        let Some(i) = self.edit_selected else {
+            self.status = "Click a green piece first, then Delete.".into();
+            self.status_ok = Some(false);
+            return;
+        };
+        if i >= self.edit_clips.len() {
+            self.edit_selected = None;
+            return;
+        }
+        if self.edit_clips.len() == 1 {
+            self.status = "Can't delete the only piece — blade first to split.".into();
+            self.status_ok = Some(false);
+            return;
+        }
+        self.push_undo();
+        let removed = self.edit_clips.remove(i);
+        if self.edit_clips.is_empty() {
+            self.edit_selected = None;
+        } else {
+            self.edit_selected = Some(i.min(self.edit_clips.len() - 1));
+            let s = self.edit_clips[self.edit_selected.unwrap()];
+            self.start_sec = s.start;
+            self.end_sec = s.end;
+        }
+        let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
+        self.status = format!(
+            "Deleted {}–{} · {} left · Cut when done",
+            format_seconds(removed.start),
+            format_seconds(removed.end),
+            format_seconds(left)
+        );
         self.status_ok = Some(true);
     }
 
     fn export_segments(&self) -> Vec<KeepSegment> {
-        if self.has_removals() {
-            return self.edit_clips.clone();
+        // After B/Delete editing → join remaining green pieces
+        if self.has_removals() || self.edit_clips.len() > 1 {
+            if !self.edit_clips.is_empty() {
+                return self.edit_clips.clone();
+            }
         }
+        // Simple single-range cut (no multi blade)
         if self.end_sec > self.start_sec + 0.02 {
             return vec![KeepSegment {
                 start: self.start_sec,
@@ -597,7 +581,7 @@ impl App {
 
         let segments = self.export_segments();
         if segments.is_empty() || segments.iter().any(|s| !s.is_valid()) {
-            self.status = "Select a range first.".into();
+            self.status = "Blade (B) and keep pieces, or set orange range.".into();
             self.status_ok = Some(false);
             return;
         }
@@ -1011,7 +995,7 @@ impl App {
                     }
                     self.player.set_decoded(Some(decoded));
                     self.decoding = false;
-                    self.status = "Ready · select junk → Delete · Cut"
+                    self.status = "Ready · B blade · click piece · Delete · Cut"
                         .into();
                     self.status_ok = Some(true);
                 }
@@ -1065,37 +1049,27 @@ impl App {
         self.player.has_audio() || self.info.as_ref().is_some_and(|i| i.has_video)
     }
 
-    /// Like Resolve Cut: select → Delete. I/O marks, B split, Ctrl+Z undo.
+    /// B blade · click clip · Delete · Ctrl+Z undo · Space play.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
             return;
         }
-        let (space, mark_i, mark_o, del, blade, undo) = ctx.input(|i| {
+        let (space, blade, del, undo) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::Space),
-                i.key_pressed(egui::Key::I),
-                i.key_pressed(egui::Key::O),
-                i.key_pressed(egui::Key::Delete)
-                    || i.key_pressed(egui::Key::Backspace)
-                    || i.key_pressed(egui::Key::X),
                 i.key_pressed(egui::Key::B),
+                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
                 (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Z),
             )
         });
         if space {
             self.toggle_playback();
         }
-        if mark_i {
-            self.mark_in();
-        }
-        if mark_o {
-            self.mark_out();
-        }
-        if del {
-            self.delete_selection();
-        }
         if blade {
             self.blade_at_playhead();
+        }
+        if del {
+            self.delete_selected_clip();
         }
         if undo {
             self.undo_edit();
@@ -1535,15 +1509,16 @@ impl App {
                 let mut seeked_ph = None;
                 if has_timeline {
                     let peaks_ref = peaks_arc.as_ref().map(|a| a.as_slice());
-                    let keep_vis: Vec<(f64, f64)> = if self.has_removals() {
-                        self.edit_clips.iter().map(|s| (s.start, s.end)).collect()
-                    } else {
-                        Vec::new()
-                    };
+                    let keep_vis: Vec<(f64, f64)> = self
+                        .edit_clips
+                        .iter()
+                        .map(|s| (s.start, s.end))
+                        .collect();
                     let visuals = TimelineVisuals {
                         peaks: peaks_ref,
                         has_video,
                         keep_ranges: &keep_vis,
+                        selected_clip: self.edit_selected,
                     };
                     let (_, out) = show_timeline(
                         ui,
@@ -1562,6 +1537,9 @@ impl App {
                     }
                     if out.seeked {
                         seeked_ph = Some(out.playhead);
+                    }
+                    if let Some(i) = out.selected_clip {
+                        self.select_clip(i);
                     }
                 } else {
                     ui.add_sized(
@@ -1770,7 +1748,7 @@ impl App {
 
                 if has_timeline {
                     ui.label(
-                        egui::RichText::new("Delete = remove orange selection · Space play · Ctrl+Z undo")
+                        egui::RichText::new("B blade · click green piece · Delete · Cut")
                             .weak()
                             .size(11.0),
                     );
