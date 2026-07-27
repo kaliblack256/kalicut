@@ -15,8 +15,8 @@ use encode_settings::{
 };
 use eframe::egui;
 use ffmpeg::{
-    ensure_tools, format_seconds, probe, suggest_output, trim, EncodeMode, FfmpegError, MediaInfo,
-    TrimRequest,
+    ensure_tools, format_seconds, probe, suggest_output, trim_multi, EncodeMode, FfmpegError,
+    KeepSegment, MediaInfo, MultiTrimRequest,
 };
 use mpv_player::{MpvPlayer, EMBED_H, EMBED_W};
 use player::{decode_file, DecodedAudio, PlayerState};
@@ -99,6 +99,10 @@ struct App {
     video_view_w: f32,
     /// Quality превью: авто / качество / скорость (не влияет на обрезку).
     preview_mode: PreviewMode,
+    /// Remaining source ranges after hotkey edits (Resolve-style).
+    edit_clips: Vec<KeepSegment>,
+    /// Undo stack of edit_clips snapshots.
+    edit_undo: Vec<Vec<KeepSegment>>,
 }
 
 impl App {
@@ -108,7 +112,7 @@ impl App {
         let player = PlayerState::new();
         let mpv = MpvPlayer::new();
         let mut status =
-            "Open a file, drag orange range on the waveform, click Cut."
+            "I In · O Out · X remove range · B blade · Del drop under playhead · Ctrl+Z undo · Cut"
                 .to_string();
         if mpv.available {
             status.push_str(" · video: embedded mpv (libmpv/hwdec).");
@@ -141,6 +145,8 @@ impl App {
             mpv,
             video_view_w: 480.0,
             preview_mode: PreviewMode::Auto,
+            edit_clips: Vec::new(),
+            edit_undo: Vec::new(),
         }
     }
 
@@ -262,6 +268,8 @@ impl App {
         self.info = None;
         self.start_sec = 0.0;
         self.end_sec = 0.0;
+        self.edit_clips.clear();
+        self.edit_undo.clear();
         self.status = format!("Probing: {}…", path.display());
         self.status_ok = None;
         self.busy = true;
@@ -367,6 +375,243 @@ impl App {
         self.clamp_range();
     }
 
+
+    fn init_edit_timeline(&mut self) {
+        let d = self.duration();
+        if d <= 0.05 {
+            self.edit_clips.clear();
+            return;
+        }
+        self.edit_clips = vec![KeepSegment {
+            start: 0.0,
+            end: d,
+        }];
+        self.edit_undo.clear();
+    }
+
+    fn push_undo(&mut self) {
+        self.edit_undo.push(self.edit_clips.clone());
+        if self.edit_undo.len() > 32 {
+            self.edit_undo.remove(0);
+        }
+    }
+
+    fn undo_edit(&mut self) {
+        if let Some(prev) = self.edit_undo.pop() {
+            self.edit_clips = prev;
+            let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
+            self.status = format!("Undo · kept {}", format_seconds(left));
+            self.status_ok = Some(true);
+        }
+    }
+
+    fn has_removals(&self) -> bool {
+        if self.edit_clips.is_empty() {
+            return false;
+        }
+        if self.edit_clips.len() > 1 {
+            return true;
+        }
+        let d = self.duration();
+        let only = self.edit_clips[0];
+        only.start > 0.05 || only.end < d - 0.05
+    }
+
+    /// I — Mark In at playhead (DaVinci).
+    fn mark_in(&mut self) {
+        if self.busy || self.input_path.is_none() {
+            return;
+        }
+        let t = self.player.playhead().clamp(0.0, self.duration().max(0.0));
+        self.start_sec = t;
+        if self.end_sec <= self.start_sec {
+            self.end_sec = (t + 1.0).min(self.duration().max(t + 0.05));
+        }
+        self.clamp_range();
+        self.status = format!("In {}", format_seconds(self.start_sec));
+        self.status_ok = Some(true);
+    }
+
+    /// O — Mark Out at playhead (DaVinci).
+    fn mark_out(&mut self) {
+        if self.busy || self.input_path.is_none() {
+            return;
+        }
+        let t = self.player.playhead().clamp(0.0, self.duration().max(0.0));
+        self.end_sec = t;
+        if self.end_sec <= self.start_sec {
+            self.start_sec = (t - 1.0).max(0.0);
+        }
+        self.clamp_range();
+        self.status = format!("Out {}", format_seconds(self.end_sec));
+        self.status_ok = Some(true);
+    }
+
+    /// X — extract / ripple-delete In–Out (remove junk between marks).
+    fn extract_in_out(&mut self) {
+        if self.busy || self.input_path.is_none() {
+            return;
+        }
+        if self.edit_clips.is_empty() {
+            self.init_edit_timeline();
+        }
+        self.clamp_range();
+        let a = self.start_sec;
+        let b = self.end_sec;
+        if b <= a + 0.05 {
+            self.status = "Set In (I) and Out (O), then X to remove.".into();
+            self.status_ok = Some(false);
+            return;
+        }
+        self.push_undo();
+        let mut new_clips: Vec<KeepSegment> = Vec::new();
+        for s in &self.edit_clips {
+            if s.end <= a + 1e-6 || s.start >= b - 1e-6 {
+                if s.is_valid() {
+                    new_clips.push(*s);
+                }
+                continue;
+            }
+            if s.start < a - 1e-6 {
+                let left = KeepSegment {
+                    start: s.start,
+                    end: a,
+                };
+                if left.is_valid() {
+                    new_clips.push(left);
+                }
+            }
+            if s.end > b + 1e-6 {
+                let right = KeepSegment {
+                    start: b,
+                    end: s.end,
+                };
+                if right.is_valid() {
+                    new_clips.push(right);
+                }
+            }
+        }
+        if new_clips.is_empty() {
+            let _ = self.edit_undo.pop();
+            self.status = "Would delete whole file.".into();
+            self.status_ok = Some(false);
+            return;
+        }
+        self.edit_clips = new_clips;
+        let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
+        self.status = format!(
+            "Removed {}–{} · kept {} · Cut when done",
+            format_seconds(a),
+            format_seconds(b),
+            format_seconds(left)
+        );
+        self.status_ok = Some(true);
+    }
+
+    /// B — blade / razor at playhead.
+    fn blade_at_playhead(&mut self) {
+        if self.busy || self.input_path.is_none() {
+            return;
+        }
+        if self.edit_clips.is_empty() {
+            self.init_edit_timeline();
+        }
+        let t = self.player.playhead();
+        let min_edge = 0.05_f64;
+        let Some(i) = self
+            .edit_clips
+            .iter()
+            .position(|s| t > s.start + min_edge && t < s.end - min_edge)
+        else {
+            self.status = "Blade: put playhead inside a kept (green) region.".into();
+            self.status_ok = Some(false);
+            return;
+        };
+        self.push_undo();
+        let old = self.edit_clips[i];
+        self.edit_clips[i] = KeepSegment {
+            start: old.start,
+            end: t,
+        };
+        self.edit_clips.insert(
+            i + 1,
+            KeepSegment {
+                start: t,
+                end: old.end,
+            },
+        );
+        self.status = format!(
+            "Blade @ {} · {} pieces · Del drops one under playhead",
+            format_seconds(t),
+            self.edit_clips.len()
+        );
+        self.status_ok = Some(true);
+    }
+
+    /// Del — drop the kept segment under the playhead.
+    fn delete_under_playhead(&mut self) {
+        if self.busy || self.input_path.is_none() {
+            return;
+        }
+        if self.edit_clips.is_empty() {
+            self.init_edit_timeline();
+        }
+        if self.edit_clips.len() <= 1 && !self.has_removals() {
+            // No blade yet: treat Del as extract In–Out if valid
+            if self.end_sec > self.start_sec + 0.05 {
+                self.extract_in_out();
+                return;
+            }
+            self.status = "Blade (B) first, or mark In/Out then X / Del.".into();
+            self.status_ok = Some(false);
+            return;
+        }
+        let t = self.player.playhead();
+        let Some(i) = self
+            .edit_clips
+            .iter()
+            .position(|s| t >= s.start - 1e-6 && t <= s.end + 1e-6)
+        else {
+            self.status = "Playhead not on a kept region.".into();
+            self.status_ok = Some(false);
+            return;
+        };
+        if self.edit_clips.len() == 1 {
+            self.status = "Cannot drop the only remaining piece.".into();
+            self.status_ok = Some(false);
+            return;
+        }
+        self.push_undo();
+        let removed = self.edit_clips.remove(i);
+        let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
+        self.status = format!(
+            "Dropped {}–{} · kept {}",
+            format_seconds(removed.start),
+            format_seconds(removed.end),
+            format_seconds(left)
+        );
+        self.status_ok = Some(true);
+    }
+
+    fn export_segments(&self) -> Vec<KeepSegment> {
+        if self.has_removals() {
+            return self.edit_clips.clone();
+        }
+        if self.end_sec > self.start_sec + 0.02 {
+            return vec![KeepSegment {
+                start: self.start_sec,
+                end: self.end_sec,
+            }];
+        }
+        if !self.edit_clips.is_empty() {
+            return self.edit_clips.clone();
+        }
+        vec![KeepSegment {
+            start: self.start_sec,
+            end: self.end_sec,
+        }]
+    }
+
     fn do_trim(&mut self) {
         if self.busy {
             return;
@@ -382,10 +627,9 @@ impl App {
             return;
         }
 
-        let start = self.start_sec;
-        let end = self.end_sec;
-        if end <= start {
-            self.status = "End must be greater than start.".into();
+        let segments = self.export_segments();
+        if segments.is_empty() || segments.iter().any(|s| !s.is_valid()) {
+            self.status = "Nothing to export — set In/Out or edit with hotkeys.".into();
             self.status_ok = Some(false);
             return;
         }
@@ -406,11 +650,17 @@ impl App {
         let _ = self.mpv.pause();
         self.player.mark_external(false);
         self.busy = true;
-        self.status = format!(
-            "Cutting {} → {} …",
-            format_seconds(start),
-            format_seconds(end)
-        );
+        let n = segments.len();
+        let keep: f64 = segments.iter().map(|s| s.duration()).sum();
+        self.status = if n == 1 {
+            format!(
+                "Cutting {} → {} …",
+                format_seconds(segments[0].start),
+                format_seconds(segments[0].end)
+            )
+        } else {
+            format!("Cutting {} pieces ({}) …", n, format_seconds(keep))
+        };
         self.status_ok = None;
 
         let input = input.clone();
@@ -420,11 +670,10 @@ impl App {
                 EncodeMode::Reencode => Some(&reencode),
                 EncodeMode::StreamCopy => None,
             };
-            let result = trim(TrimRequest {
+            let result = trim_multi(MultiTrimRequest {
                 input: &input,
                 output: &output,
-                start,
-                end,
+                segments: &segments,
                 mode,
                 total_duration: total,
                 has_video,
@@ -739,6 +988,7 @@ impl App {
                     );
                     self.player.set_media_duration(duration);
                     self.info = Some(info);
+                    self.init_edit_timeline();
                     self.busy = false;
                     if let Some(ref p) = path {
                         if has_video {
@@ -793,7 +1043,7 @@ impl App {
                     }
                     self.player.set_decoded(Some(decoded));
                     self.decoding = false;
-                    self.status = "Ready. Drag orange range on the waveform, then Cut."
+                    self.status = "Ready · I/O marks · X remove · B blade · Del · Ctrl+Z · Cut"
                         .into();
                     self.status_ok = Some(true);
                 }
@@ -847,13 +1097,42 @@ impl App {
         self.player.has_audio() || self.info.as_ref().is_some_and(|i| i.has_video)
     }
 
-    /// Space: play/pause.
+    /// DaVinci-like: I/O marks, X extract, B blade, Del drop, Ctrl+Z undo, Space play.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
             return;
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+        let (space, mark_i, mark_o, extract, blade, del, undo) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::Space),
+                i.key_pressed(egui::Key::I),
+                i.key_pressed(egui::Key::O),
+                i.key_pressed(egui::Key::X),
+                i.key_pressed(egui::Key::B),
+                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
+                (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Z),
+            )
+        });
+        if space {
             self.toggle_playback();
+        }
+        if mark_i {
+            self.mark_in();
+        }
+        if mark_o {
+            self.mark_out();
+        }
+        if extract {
+            self.extract_in_out();
+        }
+        if blade {
+            self.blade_at_playhead();
+        }
+        if del {
+            self.delete_under_playhead();
+        }
+        if undo {
+            self.undo_edit();
         }
     }
 
@@ -1290,9 +1569,15 @@ impl App {
                 let mut seeked_ph = None;
                 if has_timeline {
                     let peaks_ref = peaks_arc.as_ref().map(|a| a.as_slice());
+                    let keep_vis: Vec<(f64, f64)> = if self.has_removals() {
+                        self.edit_clips.iter().map(|s| (s.start, s.end)).collect()
+                    } else {
+                        Vec::new()
+                    };
                     let visuals = TimelineVisuals {
                         peaks: peaks_ref,
                         has_video,
+                        keep_ranges: &keep_vis,
                     };
                     let (_, out) = show_timeline(
                         ui,
@@ -1517,6 +1802,14 @@ impl App {
                     );
                 }
 
+                if has_timeline {
+                    ui.label(
+                        egui::RichText::new("I In · O Out · X remove · B blade · Del · Ctrl+Z undo")
+                            .weak()
+                            .size(11.0),
+                    );
+                }
+
             });
 
             ui.add_space(4.0);
@@ -1558,10 +1851,12 @@ impl App {
             ui.add_space(6.0);
 
             ui.horizontal(|ui| {
+                let segs = self.export_segments();
                 let can_trim = !self.busy
                     && self.tools_ok.is_ok()
                     && self.input_path.is_some()
-                    && self.selection_duration().is_some();
+                    && !segs.is_empty()
+                    && segs.iter().all(|s| s.is_valid());
 
                 let trim_btn = egui::Button::new(egui::RichText::new("✂  Cut").size(14.0).strong())
                     .min_size(egui::vec2(140.0, 28.0))

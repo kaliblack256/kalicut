@@ -2,9 +2,12 @@
 
 ## Unreleased
 
-### Changed
+### Added
 
-- Simpler cut UX: waveform + one orange range + **Cut** (multi-cut/blade UI removed)
+- **DaVinci-style hotkeys** on the waveform (no extra panel):
+  - **I** In · **O** Out · **X** remove range · **B** blade · **Del** drop · **Ctrl+Z** undo
+  - Multi-cut: mark junk → X (repeat) → **Cut**; or B + Del pieces
+  - Green kept / red removed on the scale
 
 ## [0.1.2] — 2026-07-24
 
