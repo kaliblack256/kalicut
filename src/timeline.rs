@@ -218,7 +218,7 @@ pub fn show_timeline(
         painter.text(
             track.center(),
             egui::Align2::CENTER_CENTER,
-            "I In · O Out · X remove · B blade · Del drop",
+            "select range · Delete removes it",
             egui::FontId::proportional(11.0),
             Color32::from_rgb(120, 120, 140),
         );

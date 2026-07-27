@@ -18,7 +18,7 @@ Default mode is **stream copy** (`-c copy`): quality stays like the source (no r
 - Timeline + SoundCloud-style waveform
 - Embedded **mpv** preview (`hwdec=auto`) · Auto / Quality / Speed
 - ▶ · Space play/pause · magnetic handles · min / sec / ms
-- Waveform + **Cut** with DaVinci-like keys: **I/O** · **X** remove · **B** blade · **Del** · **Ctrl+Z**
+- Waveform cut: select → **Delete** → **Cut** (I/O · B · Ctrl+Z)
 - **Stream copy** or **re-encode** (presets + manual)
 - Output: `name_cut.ext`
 

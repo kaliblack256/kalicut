@@ -112,7 +112,7 @@ impl App {
         let player = PlayerState::new();
         let mpv = MpvPlayer::new();
         let mut status =
-            "I In · O Out · X remove range · B blade · Del drop under playhead · Ctrl+Z undo · Cut"
+            "Select on waveform → Delete · Cut when done  (I/O marks · B split · Ctrl+Z)"
                 .to_string();
         if mpv.available {
             status.push_str(" · video: embedded mpv (libmpv/hwdec).");
@@ -417,7 +417,7 @@ impl App {
         only.start > 0.05 || only.end < d - 0.05
     }
 
-    /// I — Mark In at playhead (DaVinci).
+    /// I — mark In at playhead.
     fn mark_in(&mut self) {
         if self.busy || self.input_path.is_none() {
             return;
@@ -432,7 +432,7 @@ impl App {
         self.status_ok = Some(true);
     }
 
-    /// O — Mark Out at playhead (DaVinci).
+    /// O — mark Out at playhead.
     fn mark_out(&mut self) {
         if self.busy || self.input_path.is_none() {
             return;
@@ -447,8 +447,8 @@ impl App {
         self.status_ok = Some(true);
     }
 
-    /// X — extract / ripple-delete In–Out (remove junk between marks).
-    fn extract_in_out(&mut self) {
+    /// Delete selection (like Resolve: select → Del). Removes orange range, closes gap.
+    fn delete_selection(&mut self) {
         if self.busy || self.input_path.is_none() {
             return;
         }
@@ -459,7 +459,7 @@ impl App {
         let a = self.start_sec;
         let b = self.end_sec;
         if b <= a + 0.05 {
-            self.status = "Set In (I) and Out (O), then X to remove.".into();
+            self.status = "Drag orange range over junk, then Delete.".into();
             self.status_ok = Some(false);
             return;
         }
@@ -493,22 +493,35 @@ impl App {
         }
         if new_clips.is_empty() {
             let _ = self.edit_undo.pop();
-            self.status = "Would delete whole file.".into();
+            self.status = "That would delete the whole file.".into();
             self.status_ok = Some(false);
             return;
         }
         self.edit_clips = new_clips;
         let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
         self.status = format!(
-            "Removed {}–{} · kept {} · Cut when done",
-            format_seconds(a),
-            format_seconds(b),
+            "Deleted · kept {} · select next junk or Cut",
             format_seconds(left)
         );
         self.status_ok = Some(true);
+
+        // Like Resolve: continue after the cut
+        let d = self.duration();
+        self.player.set_playhead(b.clamp(0.0, d));
+        if self.use_mpv() {
+            let _ = self.mpv.seek(b.clamp(0.0, d));
+        }
+        if b < d - 0.15 {
+            self.start_sec = b;
+            self.end_sec = (b + (b - a).clamp(0.5, 8.0)).min(d);
+        } else if a > 0.15 {
+            self.start_sec = (a - 3.0).max(0.0);
+            self.end_sec = a;
+        }
+        self.clamp_range();
     }
 
-    /// B — blade / razor at playhead.
+    /// B — split at playhead (optional; main flow is select → Del).
     fn blade_at_playhead(&mut self) {
         if self.busy || self.input_path.is_none() {
             return;
@@ -523,7 +536,7 @@ impl App {
             .iter()
             .position(|s| t > s.start + min_edge && t < s.end - min_edge)
         else {
-            self.status = "Blade: put playhead inside a kept (green) region.".into();
+            self.status = "Move playhead onto the clip, then B.".into();
             self.status_ok = Some(false);
             return;
         };
@@ -540,56 +553,11 @@ impl App {
                 end: old.end,
             },
         );
-        self.status = format!(
-            "Blade @ {} · {} pieces · Del drops one under playhead",
-            format_seconds(t),
-            self.edit_clips.len()
-        );
-        self.status_ok = Some(true);
-    }
-
-    /// Del — drop the kept segment under the playhead.
-    fn delete_under_playhead(&mut self) {
-        if self.busy || self.input_path.is_none() {
-            return;
-        }
-        if self.edit_clips.is_empty() {
-            self.init_edit_timeline();
-        }
-        if self.edit_clips.len() <= 1 && !self.has_removals() {
-            // No blade yet: treat Del as extract In–Out if valid
-            if self.end_sec > self.start_sec + 0.05 {
-                self.extract_in_out();
-                return;
-            }
-            self.status = "Blade (B) first, or mark In/Out then X / Del.".into();
-            self.status_ok = Some(false);
-            return;
-        }
-        let t = self.player.playhead();
-        let Some(i) = self
-            .edit_clips
-            .iter()
-            .position(|s| t >= s.start - 1e-6 && t <= s.end + 1e-6)
-        else {
-            self.status = "Playhead not on a kept region.".into();
-            self.status_ok = Some(false);
-            return;
-        };
-        if self.edit_clips.len() == 1 {
-            self.status = "Cannot drop the only remaining piece.".into();
-            self.status_ok = Some(false);
-            return;
-        }
-        self.push_undo();
-        let removed = self.edit_clips.remove(i);
-        let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
-        self.status = format!(
-            "Dropped {}–{} · kept {}",
-            format_seconds(removed.start),
-            format_seconds(removed.end),
-            format_seconds(left)
-        );
+        // Select the right piece as orange (easy to Del if junk is to the right)
+        self.start_sec = t;
+        self.end_sec = old.end;
+        self.clamp_range();
+        self.status = format!("Split @ {} · select piece → Delete", format_seconds(t));
         self.status_ok = Some(true);
     }
 
@@ -629,7 +597,7 @@ impl App {
 
         let segments = self.export_segments();
         if segments.is_empty() || segments.iter().any(|s| !s.is_valid()) {
-            self.status = "Nothing to export — set In/Out or edit with hotkeys.".into();
+            self.status = "Select a range first.".into();
             self.status_ok = Some(false);
             return;
         }
@@ -1043,7 +1011,7 @@ impl App {
                     }
                     self.player.set_decoded(Some(decoded));
                     self.decoding = false;
-                    self.status = "Ready · I/O marks · X remove · B blade · Del · Ctrl+Z · Cut"
+                    self.status = "Ready · select junk → Delete · Cut"
                         .into();
                     self.status_ok = Some(true);
                 }
@@ -1097,19 +1065,20 @@ impl App {
         self.player.has_audio() || self.info.as_ref().is_some_and(|i| i.has_video)
     }
 
-    /// DaVinci-like: I/O marks, X extract, B blade, Del drop, Ctrl+Z undo, Space play.
+    /// Like Resolve Cut: select → Delete. I/O marks, B split, Ctrl+Z undo.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
             return;
         }
-        let (space, mark_i, mark_o, extract, blade, del, undo) = ctx.input(|i| {
+        let (space, mark_i, mark_o, del, blade, undo) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::Space),
                 i.key_pressed(egui::Key::I),
                 i.key_pressed(egui::Key::O),
-                i.key_pressed(egui::Key::X),
+                i.key_pressed(egui::Key::Delete)
+                    || i.key_pressed(egui::Key::Backspace)
+                    || i.key_pressed(egui::Key::X),
                 i.key_pressed(egui::Key::B),
-                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
                 (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Z),
             )
         });
@@ -1122,14 +1091,11 @@ impl App {
         if mark_o {
             self.mark_out();
         }
-        if extract {
-            self.extract_in_out();
+        if del {
+            self.delete_selection();
         }
         if blade {
             self.blade_at_playhead();
-        }
-        if del {
-            self.delete_under_playhead();
         }
         if undo {
             self.undo_edit();
@@ -1804,7 +1770,7 @@ impl App {
 
                 if has_timeline {
                     ui.label(
-                        egui::RichText::new("I In · O Out · X remove · B blade · Del · Ctrl+Z undo")
+                        egui::RichText::new("Delete = remove orange selection · Space play · Ctrl+Z undo")
                             .weak()
                             .size(11.0),
                     );

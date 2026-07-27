@@ -4,10 +4,9 @@
 
 ### Added
 
-- **DaVinci-style hotkeys** on the waveform (no extra panel):
-  - **I** In · **O** Out · **X** remove range · **B** blade · **Del** drop · **Ctrl+Z** undo
-  - Multi-cut: mark junk → X (repeat) → **Cut**; or B + Del pieces
-  - Green kept / red removed on the scale
+- **Cut like Resolve**: select junk on the waveform → **Delete** → repeat → **Cut**
+  - **I** / **O** marks · **B** split (optional) · **Ctrl+Z** undo · **X** = same as Delete
+  - Waveform kept; green = remaining after deletes
 
 ## [0.1.2] — 2026-07-24
 
