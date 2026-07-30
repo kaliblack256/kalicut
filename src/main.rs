@@ -1473,11 +1473,21 @@ impl App {
                         .iter()
                         .map(|s| (s.start, s.end))
                         .collect();
+                    let has_audio = self.info.as_ref().is_some_and(|i| i.has_audio)
+                        || peaks_ref.is_some();
+                    let clip_name = self
+                        .input_path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("Clip");
                     let visuals = TimelineVisuals {
                         peaks: peaks_ref,
                         has_video,
+                        has_audio,
                         keep_ranges: &keep_vis,
                         selected_clip: self.edit_selected,
+                        clip_label: clip_name,
                     };
                     let (_, out) = show_timeline(
                         ui,
