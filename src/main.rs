@@ -490,20 +490,28 @@ impl App {
             return;
         }
         self.push_undo();
-        let removed = self.edit_clips.remove(i);
+        let _removed = self.edit_clips.remove(i);
+        // Ripple: remaining clips join on the scale — snap playhead to join
         if self.edit_clips.is_empty() {
             self.edit_selected = None;
         } else {
-            self.edit_selected = Some(i.min(self.edit_clips.len() - 1));
-            let s = self.edit_clips[self.edit_selected.unwrap()];
+            let next = i.min(self.edit_clips.len() - 1);
+            self.edit_selected = Some(next);
+            let s = self.edit_clips[next];
             self.start_sec = s.start;
             self.end_sec = s.end;
+            let join = s.start;
+            self.player.set_playhead(join);
+            if self.use_mpv() {
+                let _ = self.mpv.seek(join);
+            } else if self.info.as_ref().is_some_and(|inf| inf.has_video) {
+                self.video.show_still(join, true);
+                self.last_video_still = join;
+            }
         }
         let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
         self.status = format!(
-            "Deleted {}–{} · {} left · Cut when done",
-            format_seconds(removed.start),
-            format_seconds(removed.end),
+            "Deleted · pieces joined · {} left · Cut when done",
             format_seconds(left)
         );
         self.status_ok = Some(true);
@@ -1014,9 +1022,12 @@ impl App {
             return;
         }
         let (space, blade, del, undo) = ctx.input(|i| {
+            let b = i.key_pressed(egui::Key::B);
+            // Plain B or Ctrl/Cmd+B (Resolve-style)
+            let blade = b;
             (
                 i.key_pressed(egui::Key::Space),
-                i.key_pressed(egui::Key::B),
+                blade,
                 i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
                 (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Z),
             )
