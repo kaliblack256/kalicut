@@ -499,23 +499,48 @@ impl App {
             return;
         }
         self.push_undo();
+        // Join point: stay on the left piece (end), not jump to the right piece start
+        let join_src = if i > 0 {
+            self.edit_clips[i - 1].end
+        } else if i + 1 < self.edit_clips.len() {
+            self.edit_clips[i + 1].start
+        } else {
+            0.0
+        };
         let _removed = self.edit_clips.remove(i);
-        // Ripple: remaining clips join on the scale — snap playhead to join
+        // Ripple on the scale: pieces join; playhead at the join (left side)
         if self.edit_clips.is_empty() {
             self.edit_selected = None;
+            self.player.set_playhead(0.0);
         } else {
-            let next = i.min(self.edit_clips.len() - 1);
-            self.edit_selected = Some(next);
-            let s = self.edit_clips[next];
+            // Select the clip that ends at / touches the join (left), else first remaining
+            let sel = if i > 0 {
+                (i - 1).min(self.edit_clips.len() - 1)
+            } else {
+                0
+            };
+            self.edit_selected = Some(sel);
+            let s = self.edit_clips[sel];
             self.start_sec = s.start;
             self.end_sec = s.end;
-            let join = s.start;
-            self.player.set_playhead(join);
+            // Prefer end of left piece so Play continues into the right piece as one stream
+            let ph = if i > 0 {
+                join_src.max(0.0)
+            } else {
+                self.edit_clips[0].start
+            };
+            // Nudge slightly inside the left clip so program_play_range keeps playing from left
+            let ph = if i > 0 {
+                (ph - 0.05).max(s.start)
+            } else {
+                ph
+            };
+            self.player.set_playhead(ph);
             if self.use_mpv() {
-                let _ = self.mpv.seek(join);
+                let _ = self.mpv.seek(ph);
             } else if self.info.as_ref().is_some_and(|inf| inf.has_video) {
-                self.video.show_still(join, true);
-                self.last_video_still = join;
+                self.video.show_still(ph, true);
+                self.last_video_still = ph;
             }
         }
         let left: f64 = self.edit_clips.iter().map(|s| s.duration()).sum();
@@ -548,30 +573,34 @@ impl App {
 
     /// Contiguous play range from `from` in source time until a deleted gap (or end).
     /// Returns (start, stop_at) for one continuous source run.
+    /// Never jumps to the last clip just because `from` is past everything — restarts at first.
     fn program_play_range(&self, from: f64) -> Option<(f64, f64)> {
         let clips = self.keep_segments_list();
         if clips.is_empty() {
             return None;
         }
-        // Find clip containing from, or next clip after a gap
-        let mut idx = None;
+        // 1) Inside a keep clip → play from here
+        // 2) In a gap → next clip after the gap
+        // 3) Before all → first clip
+        // 4) After all keeps → first clip (program start), NOT last clip start
+        let mut idx: Option<usize> = None;
         for (i, c) in clips.iter().enumerate() {
-            if from < c.start - 0.01 {
+            if from + 0.02 >= c.start && from < c.end - 0.01 {
                 idx = Some(i);
                 break;
             }
-            if from < c.end - 0.02 {
+            if from < c.start {
                 idx = Some(i);
                 break;
             }
         }
-        let i = idx.or_else(|| clips.len().checked_sub(1))?;
+        let i = idx.unwrap_or(0);
         let start = if from >= clips[i].start && from < clips[i].end {
-            from.max(clips[i].start)
+            from.clamp(clips[i].start, clips[i].end)
         } else {
             clips[i].start
         };
-        // Extend through source-adjacent clips (no gap)
+        // Extend through source-adjacent clips (no deleted gap between)
         let mut end = clips[i].end;
         let mut j = i;
         while j + 1 < clips.len() {
