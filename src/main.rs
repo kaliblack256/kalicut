@@ -499,24 +499,19 @@ impl App {
             return;
         }
         self.push_undo();
-        // Before remove: remember where to park playhead (inside LEFT remaining piece)
+        // Park playhead at START of the left remaining piece (so Play can play it fully)
         let ph_after = if i > 0 {
-            // deleted a piece after the first → stay near end of previous (still "first side")
-            let left = self.edit_clips[i - 1];
-            (left.end - 0.15).max(left.start)
+            self.edit_clips[i - 1].start
         } else if i + 1 < self.edit_clips.len() {
-            // deleted the first piece → start of what becomes the new first
             self.edit_clips[i + 1].start
         } else {
             0.0
         };
         let _removed = self.edit_clips.remove(i);
-        // Ripple on the scale: pieces join; playhead stays on the left fragment
         if self.edit_clips.is_empty() {
             self.edit_selected = None;
             self.player.set_playhead(0.0);
         } else {
-            // Select whichever clip contains ph_after (prefer left)
             let sel = self
                 .edit_clips
                 .iter()
@@ -526,7 +521,7 @@ impl App {
             let s = self.edit_clips[sel];
             self.start_sec = s.start;
             self.end_sec = s.end;
-            let ph = ph_after.clamp(s.start, (s.end - 0.02).max(s.start));
+            let ph = s.start;
             self.player.set_playhead(ph);
             if self.use_mpv() {
                 let _ = self.mpv.seek(ph);
@@ -616,36 +611,58 @@ impl App {
         Some((start, end))
     }
 
-    /// If playback hit end of a keep-run, next segment after a gap.
+    /// If playback hit end of a keep-run, next segment after a **real** deleted gap.
+    /// Must NOT treat "before a later clip" as a gap while still inside an earlier clip.
     fn next_program_after(&self, source_t: f64) -> Option<(f64, f64)> {
         let clips = self.keep_segments_list();
+        if clips.is_empty() {
+            return None;
+        }
+
+        // Still inside any keep piece → do not jump
+        if clips
+            .iter()
+            .any(|c| source_t >= c.start - 1e-3 && source_t < c.end - 0.05)
+        {
+            return None;
+        }
+
+        // At/just past end of a contiguous keep-run → next run after a gap
         for (i, c) in clips.iter().enumerate() {
-            // At or just past end of this clip/run
-            if source_t >= c.end - 0.12 && source_t <= c.end + 0.25 {
-                // skip adjacent chain already covered by stop_at
+            if source_t >= c.end - 0.12 && source_t <= c.end + 0.35 {
                 let mut j = i;
                 let mut end = c.end;
                 while j + 1 < clips.len() && clips[j + 1].start <= end + 0.08 {
                     j += 1;
                     end = clips[j].end;
                 }
-                if source_t < end - 0.12 {
-                    return None; // still inside contiguous run
+                // Still in the middle of a contiguous run
+                if source_t < end - 0.05 {
+                    return None;
                 }
                 if j + 1 < clips.len() {
                     let n = &clips[j + 1];
-                    if let Some((_, stop)) = self.program_play_range(n.start) {
-                        return Some((n.start, stop));
+                    // Only if there is a real source gap
+                    if n.start > end + 0.05 {
+                        if let Some((_, stop)) = self.program_play_range(n.start) {
+                            return Some((n.start, stop));
+                        }
                     }
                 }
                 return None;
             }
         }
-        // In a deleted gap: jump to next keep
-        for c in &clips {
-            if c.start > source_t + 0.01 {
-                if let Some((_, stop)) = self.program_play_range(c.start) {
-                    return Some((c.start, stop));
+
+        // Truly in a deleted gap (not inside any clip): jump forward to next keep
+        let in_any = clips
+            .iter()
+            .any(|c| source_t >= c.start - 1e-3 && source_t <= c.end + 1e-3);
+        if !in_any {
+            for c in &clips {
+                if c.start > source_t + 0.01 {
+                    if let Some((_, stop)) = self.program_play_range(c.start) {
+                        return Some((c.start, stop));
+                    }
                 }
             }
         }
@@ -1276,9 +1293,13 @@ impl eframe::App for App {
                     }
                 } else {
                     self.player.mark_external(true);
-                    // Proactive jump slightly before stop_at for smoother join
+                    // Jump only when we reach the end of a keep-run (not while mid-clip)
                     if self.program_play {
-                        let _ = self.continue_program_play(st.time);
+                        if let Some(end) = self.mpv.stop_at {
+                            if st.time >= end - 0.08 {
+                                let _ = self.continue_program_play(st.time);
+                            }
+                        }
                     }
                 }
             }
