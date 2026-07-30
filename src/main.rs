@@ -103,6 +103,8 @@ struct App {
     edit_selected: Option<usize>,
     /// Undo stack of edit_clips snapshots.
     edit_undo: Vec<Vec<KeepSegment>>,
+    /// Space play through joined program (skip deleted gaps, chain clips).
+    program_play: bool,
 }
 
 impl App {
@@ -148,6 +150,7 @@ impl App {
             edit_clips: Vec::new(),
             edit_selected: None,
             edit_undo: Vec::new(),
+            program_play: false,
         }
     }
 
@@ -309,20 +312,26 @@ impl App {
                 None => return,
             };
             if playing && !was_playing {
-                let stop = Some(self.end_sec);
-                match self.mpv.play_from(&path, ph, stop) {
+                let (from, stop) = self
+                    .program_play_range(ph)
+                    .map(|(a, b)| (a, Some(b)))
+                    .unwrap_or((ph, Some(self.end_sec)));
+                self.program_play = true;
+                match self.mpv.play_from(&path, from, stop) {
                     Ok(()) => {
                         self.player.mark_external(true);
-                        self.status = "▶ mpv in Fragment panel · hwdec=auto".into();
+                        self.status = "▶ program play · gaps skipped".into();
                         self.status_ok = Some(true);
                     }
                     Err(e) => {
+                        self.program_play = false;
                         self.player.mark_external(false);
                         self.status = format!("mpv: {e}");
                         self.status_ok = Some(false);
                     }
                 }
             } else if !playing && was_playing {
+                self.program_play = false;
                 let _ = self.mpv.pause();
                 self.player.mark_external(false);
             } else if !playing {
@@ -518,17 +527,125 @@ impl App {
     }
 
     fn export_segments(&self) -> Vec<KeepSegment> {
+        self.keep_segments_list()
+    }
+
+    /// Kept pieces in order (full file if never bladed).
+    fn keep_segments_list(&self) -> Vec<KeepSegment> {
         if !self.edit_clips.is_empty() {
             return self.edit_clips.clone();
         }
         let d = self.duration();
         if d > 0.05 {
-            return vec![KeepSegment {
+            vec![KeepSegment {
                 start: 0.0,
                 end: d,
-            }];
+            }]
+        } else {
+            vec![]
         }
-        vec![]
+    }
+
+    /// Contiguous play range from `from` in source time until a deleted gap (or end).
+    /// Returns (start, stop_at) for one continuous source run.
+    fn program_play_range(&self, from: f64) -> Option<(f64, f64)> {
+        let clips = self.keep_segments_list();
+        if clips.is_empty() {
+            return None;
+        }
+        // Find clip containing from, or next clip after a gap
+        let mut idx = None;
+        for (i, c) in clips.iter().enumerate() {
+            if from < c.start - 0.01 {
+                idx = Some(i);
+                break;
+            }
+            if from < c.end - 0.02 {
+                idx = Some(i);
+                break;
+            }
+        }
+        let i = idx.or_else(|| clips.len().checked_sub(1))?;
+        let start = if from >= clips[i].start && from < clips[i].end {
+            from.max(clips[i].start)
+        } else {
+            clips[i].start
+        };
+        // Extend through source-adjacent clips (no gap)
+        let mut end = clips[i].end;
+        let mut j = i;
+        while j + 1 < clips.len() {
+            let next = &clips[j + 1];
+            if next.start <= end + 0.08 {
+                end = next.end;
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        Some((start, end))
+    }
+
+    /// If playback hit end of a keep-run, next segment after a gap.
+    fn next_program_after(&self, source_t: f64) -> Option<(f64, f64)> {
+        let clips = self.keep_segments_list();
+        for (i, c) in clips.iter().enumerate() {
+            // At or just past end of this clip/run
+            if source_t >= c.end - 0.12 && source_t <= c.end + 0.25 {
+                // skip adjacent chain already covered by stop_at
+                let mut j = i;
+                let mut end = c.end;
+                while j + 1 < clips.len() && clips[j + 1].start <= end + 0.08 {
+                    j += 1;
+                    end = clips[j].end;
+                }
+                if source_t < end - 0.12 {
+                    return None; // still inside contiguous run
+                }
+                if j + 1 < clips.len() {
+                    let n = &clips[j + 1];
+                    if let Some((_, stop)) = self.program_play_range(n.start) {
+                        return Some((n.start, stop));
+                    }
+                }
+                return None;
+            }
+        }
+        // In a deleted gap: jump to next keep
+        for c in &clips {
+            if c.start > source_t + 0.01 {
+                if let Some((_, stop)) = self.program_play_range(c.start) {
+                    return Some((c.start, stop));
+                }
+            }
+        }
+        None
+    }
+
+    /// Chain play across joined pieces (skip deleted source gaps).
+    fn continue_program_play(&mut self, source_t: f64) -> bool {
+        if !self.program_play {
+            return false;
+        }
+        let Some(path) = self.input_path.clone() else {
+            return false;
+        };
+        let Some((from, stop)) = self.next_program_after(source_t) else {
+            return false;
+        };
+        match self.mpv.play_from(&path, from, Some(stop)) {
+            Ok(()) => {
+                self.player.set_playhead_live(from);
+                self.player.mark_external(true);
+                true
+            }
+            Err(e) => {
+                self.status = format!("play: {e}");
+                self.status_ok = Some(false);
+                self.program_play = false;
+                false
+            }
+        }
     }
 
     fn do_trim(&mut self) {
@@ -1053,8 +1170,9 @@ impl App {
         let was = self.player.is_playing();
 
         if self.use_mpv() {
-            // mpv играет A+V сам — rodio не трогаем
+            // mpv: continuous program play (joined clips, skip gaps)
             if was {
+                self.program_play = false;
                 let _ = self.mpv.pause();
                 self.player.mark_external(false);
                 let ph = self.player.playhead();
@@ -1065,18 +1183,22 @@ impl App {
                     Some(p) => p,
                     None => return,
                 };
-                let mut ph = self.player.playhead();
-                if ph < self.start_sec || ph >= self.end_sec {
-                    ph = self.start_sec;
-                    self.player.set_playhead_live(ph);
-                }
-                match self.mpv.play_from(&path, ph, Some(self.end_sec)) {
+                let ph = self.player.playhead();
+                let Some((from, stop)) = self.program_play_range(ph) else {
+                    self.status = "Nothing to play.".into();
+                    self.status_ok = Some(false);
+                    return;
+                };
+                self.program_play = true;
+                match self.mpv.play_from(&path, from, Some(stop)) {
                     Ok(()) => {
+                        self.player.set_playhead_live(from);
                         self.player.mark_external(true);
-                        self.status = "▶ mpv in Fragment panel · hwdec=auto".into();
+                        self.status = "▶ program play · gaps skipped".into();
                         self.status_ok = Some(true);
                     }
                     Err(e) => {
+                        self.program_play = false;
                         self.status = format!("mpv: {e}");
                         self.status_ok = Some(false);
                     }
@@ -1085,15 +1207,17 @@ impl App {
             return;
         }
 
-        // audio / ffmpeg fallback
+        // audio / ffmpeg fallback — play through keep segments one by one
         if was {
+            self.program_play = false;
             self.player.pause();
         } else {
             let ph = self.player.playhead();
-            if ph < self.start_sec || ph >= self.end_sec {
-                self.player.play_selection(self.start_sec, self.end_sec);
+            if let Some((from, stop)) = self.program_play_range(ph) {
+                self.program_play = true;
+                self.player.play_selection(from, stop);
             } else {
-                self.player.play(Some(self.end_sec));
+                self.player.play(None);
             }
         }
         self.sync_video_with_player(was);
@@ -1104,23 +1228,47 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let was_playing = self.player.is_playing();
 
-        // --- mpv poll + render в текстуру панели ---
+        // --- mpv poll + render; chain joined clips into one stream ---
         if self.use_mpv() && self.mpv.is_running() {
             if let Some(st) = self.mpv.poll() {
                 self.player.set_playhead_live(st.time);
                 if st.paused || st.eof {
-                    if self.player.is_playing() {
+                    // End of one keep-run → jump to next piece (continuous program)
+                    if self.program_play && self.continue_program_play(st.time) {
+                        // still playing next segment
+                    } else if self.program_play {
+                        self.program_play = false;
+                        self.player.mark_external(false);
+                        self.status = "▶ end of program".into();
+                        self.status_ok = Some(true);
+                    } else if self.player.is_playing() {
                         self.player.mark_external(false);
                     }
                 } else {
                     self.player.mark_external(true);
+                    // Proactive jump slightly before stop_at for smoother join
+                    if self.program_play {
+                        let _ = self.continue_program_play(st.time);
+                    }
                 }
             }
             self.mpv.pump_texture(ctx);
         } else {
             self.player.tick();
             if was_playing && !self.player.is_playing() {
-                self.sync_video_with_player(true);
+                // audio path: chain next segment
+                if self.program_play {
+                    let t = self.player.playhead();
+                    if let Some((from, stop)) = self.next_program_after(t) {
+                        self.player.play_selection(from, stop);
+                        self.sync_video_with_player(false);
+                    } else {
+                        self.program_play = false;
+                        self.sync_video_with_player(true);
+                    }
+                } else {
+                    self.sync_video_with_player(true);
+                }
             }
             if self.player.is_playing() && self.player.video_clock {
                 if let Some(t) = self.video.latest_frame_time() {
