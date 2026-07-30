@@ -1727,6 +1727,7 @@ impl App {
                         .on_hover_text("From selection start to end")
                         .clicked()
                     {
+                        self.program_play = false;
                         if self.use_mpv() {
                             if let Some(path) = self.input_path.clone() {
                                 match self.mpv.play_from(
@@ -1756,6 +1757,7 @@ impl App {
                         .add_enabled(can_play || self.player.is_playing(), egui::Button::new("⏹ Stop"))
                         .clicked()
                     {
+                        self.program_play = false;
                         if self.use_mpv() {
                             let _ = self.mpv.stop_playback();
                             let _ = self.mpv.seek(self.start_sec);
