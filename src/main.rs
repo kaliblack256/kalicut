@@ -499,42 +499,34 @@ impl App {
             return;
         }
         self.push_undo();
-        // Join point: stay on the left piece (end), not jump to the right piece start
-        let join_src = if i > 0 {
-            self.edit_clips[i - 1].end
+        // Before remove: remember where to park playhead (inside LEFT remaining piece)
+        let ph_after = if i > 0 {
+            // deleted a piece after the first → stay near end of previous (still "first side")
+            let left = self.edit_clips[i - 1];
+            (left.end - 0.15).max(left.start)
         } else if i + 1 < self.edit_clips.len() {
+            // deleted the first piece → start of what becomes the new first
             self.edit_clips[i + 1].start
         } else {
             0.0
         };
         let _removed = self.edit_clips.remove(i);
-        // Ripple on the scale: pieces join; playhead at the join (left side)
+        // Ripple on the scale: pieces join; playhead stays on the left fragment
         if self.edit_clips.is_empty() {
             self.edit_selected = None;
             self.player.set_playhead(0.0);
         } else {
-            // Select the clip that ends at / touches the join (left), else first remaining
-            let sel = if i > 0 {
-                (i - 1).min(self.edit_clips.len() - 1)
-            } else {
-                0
-            };
+            // Select whichever clip contains ph_after (prefer left)
+            let sel = self
+                .edit_clips
+                .iter()
+                .position(|c| ph_after >= c.start - 1e-3 && ph_after <= c.end + 1e-3)
+                .unwrap_or(0);
             self.edit_selected = Some(sel);
             let s = self.edit_clips[sel];
             self.start_sec = s.start;
             self.end_sec = s.end;
-            // Prefer end of left piece so Play continues into the right piece as one stream
-            let ph = if i > 0 {
-                join_src.max(0.0)
-            } else {
-                self.edit_clips[0].start
-            };
-            // Nudge slightly inside the left clip so program_play_range keeps playing from left
-            let ph = if i > 0 {
-                (ph - 0.05).max(s.start)
-            } else {
-                ph
-            };
+            let ph = ph_after.clamp(s.start, (s.end - 0.02).max(s.start));
             self.player.set_playhead(ph);
             if self.use_mpv() {
                 let _ = self.mpv.seek(ph);
@@ -572,35 +564,44 @@ impl App {
     }
 
     /// Contiguous play range from `from` in source time until a deleted gap (or end).
-    /// Returns (start, stop_at) for one continuous source run.
-    /// Never jumps to the last clip just because `from` is past everything — restarts at first.
+    /// At a cut boundary, prefer the **left** clip so the first fragment still plays.
     fn program_play_range(&self, from: f64) -> Option<(f64, f64)> {
         let clips = self.keep_segments_list();
         if clips.is_empty() {
             return None;
         }
-        // 1) Inside a keep clip → play from here
-        // 2) In a gap → next clip after the gap
-        // 3) Before all → first clip
-        // 4) After all keeps → first clip (program start), NOT last clip start
+        let from = from.max(0.0);
+
+        // Prefer clip containing `from` (end-inclusive → left clip wins on a cut line)
         let mut idx: Option<usize> = None;
         for (i, c) in clips.iter().enumerate() {
-            if from + 0.02 >= c.start && from < c.end - 0.01 {
-                idx = Some(i);
-                break;
-            }
-            if from < c.start {
+            if from >= c.start - 1e-3 && from <= c.end + 1e-3 {
                 idx = Some(i);
                 break;
             }
         }
+        // Deleted gap → next keep after the gap
+        if idx.is_none() {
+            for (i, c) in clips.iter().enumerate() {
+                if from < c.start {
+                    idx = Some(i);
+                    break;
+                }
+            }
+        }
+        // Past all keeps → first clip (start of program), never the last by default
         let i = idx.unwrap_or(0);
+
         let start = if from >= clips[i].start && from < clips[i].end {
-            from.clamp(clips[i].start, clips[i].end)
+            from
+        } else if from >= clips[i].end - 0.05 && from <= clips[i].end + 0.05 {
+            // On the right edge of this clip: start slightly earlier so left piece plays
+            (clips[i].end - 0.25).max(clips[i].start)
         } else {
             clips[i].start
         };
-        // Extend through source-adjacent clips (no deleted gap between)
+
+        // Extend only through source-adjacent clips (no deleted gap)
         let mut end = clips[i].end;
         let mut j = i;
         while j + 1 < clips.len() {
